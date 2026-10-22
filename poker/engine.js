@@ -145,6 +145,7 @@ class Room {
     this.bustOrder = [];
     this.nextHandAt = 0;
     this.event = null; this.events = []; this.eventCounter = 0;
+    this.notify = () => {}; // serverul trimite notificări (e rândul tău / mai ai 10 secunde)
     this.touched = Date.now();
     this.createdAt = Date.now() + '-' + crypto.randomBytes(3).toString('hex');
     this.hostToken = null;
@@ -467,8 +468,9 @@ class Room {
   }
   setTurn(token, now) {
     const h = this.hand;
-    h.toAct = token; h.turnStart = now; h.usingBank = false;
+    h.toAct = token; h.turnStart = now; h.usingBank = false; h.warned = false;
     h.deadline = token ? now + this.settings.turnSec * 1000 : 0;
+    if (token) { const p = this.byToken(token); if (p && !p.bot) try { this.notify(p, "turn"); } catch (_) {} }
   }
 
   act(token, type, amount, now) {
@@ -532,6 +534,7 @@ class Room {
     if (h.extraUsed[token]) throw new Error("Ai folosit deja timpul extra la mâna aceasta.");
     h.extraUsed[token] = true;
     h.deadline = Math.max(h.deadline, now) + this.settings.timeBankSec * 1000;
+    h.warned = false;
     h.usingBank = true;
     this.addLog(`${p.name} cere ${this.settings.timeBankSec} secunde în plus.`);
   }
@@ -732,8 +735,9 @@ class Room {
     }
     if (h && !h.done && h.toAct) {
       const p = this.byToken(h.toAct);
-      const offline = p && p.conns === 0;
+      const offline = p && p.conns === 0 && !p.push; // cine are notificări primește tot timpul de gândire
       const limit = offline ? Math.min(h.deadline, h.turnStart + 4000) : h.deadline;
+      if (!h.warned && h.deadline - now <= 10000 && now < limit && p && !p.bot) { h.warned = true; try { this.notify(p, "10s"); } catch (_) {} }
       if (now >= limit) {
         {
           const owe = h.currentBet - h.bet[h.toAct];

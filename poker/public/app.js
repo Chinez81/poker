@@ -41,7 +41,9 @@
   const firstSeen = new Map();
   const m = location.pathname.match(/^\/masa\/([A-Za-z0-9]{4,8})(?:\/(s\.[A-Za-z0-9_-]+\.[a-f0-9]{20}))?/);
   const urlCode = m ? m[1].toUpperCase() : null;
-  if (m && m[2]) store.set("poker:" + urlCode, m[2]); // link personal
+  if (m && m[2]) { store.set("poker:" + urlCode, m[2]); store.set("poker:lastLink", location.pathname); } // link personal
+  // aplicația de pe ecranul principal se deschide direct la masa ta
+  if (!m && location.pathname === "/" && store.get("poker:lastLink")) { location.replace(store.get("poker:lastLink")); }
   let restored = false;
 
   // ---------- sunete ----------
@@ -86,7 +88,8 @@
     win() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.18, "triangle", 0.25, i * 0.1)); },
     pot() { tone(1500, 0.08, "triangle", 0.15); tone(1900, 0.1, "triangle", 0.12, 0.08); },
     emoji() { tone(1000, 0.08, "sine", 0.15, 0, 1400); },
-    tick() { tone(1200, 0.04, "square", 0.08); },
+    tick() { tone(1400, 0.06, "square", 0.12); },
+    alarm() { [0, 0.18, 0.36, 0.54].forEach((d, i) => tone(i % 2 ? 988 : 1319, 0.16, "square", 0.22, d)); },
   };
   function playDiff(prev, cur) {
     if (!audioCtx || !cur || !cur.started || cur.finished) return;
@@ -159,6 +162,104 @@
     if (me && !me.avatarV && saved) post("avatar", { data: saved }).catch(() => {});
   }
 
+  // ---------- aplicația pe ecranul principal + actualizări ----------
+  let installEvt = null, loadedVersion = null, updateShown = false;
+  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; refreshAppPanels(); });
+  window.addEventListener("appinstalled", () => { installEvt = null; toast("Aplicația a fost adăugată pe ecranul principal."); refreshAppPanels(); });
+  function refreshAppPanels() { if (screen === "lobby") patch("appArea", appHtml()); if (drawer && drawerTab === "me") updateDrawer(true); }
+  function appHtml() {
+    const isStandalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+    let h = "";
+    if (isStandalone) h += `<p class="hint">✅ Folosești aplicația de pe ecranul principal.</p>`;
+    else if (installEvt) h += `<button class="btn primary" data-act="install">📲 Instalează aplicația pe ecranul principal</button><p class="hint">Apare iconița „Poker” lângă celelalte aplicații și intri direct la masa ta.</p>`;
+    else h += `<button class="btn primary" data-act="installHelp">📲 Pune aplicația pe ecranul principal</button><p class="hint">Iconița „Poker” te duce direct la masa ta, ca o aplicație.</p>`;
+    h += `<button class="btn" data-act="reload">🔄 Actualizează (încarcă ultima versiune)</button>`;
+    return h;
+  }
+  async function doInstall() {
+    if (installEvt) { installEvt.prompt(); try { await installEvt.userChoice; } catch (_) {} installEvt = null; refreshAppPanels(); return; }
+    showInstallHelp();
+  }
+  function showInstallHelp() {
+    const ios = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    const m = document.createElement("div"); m.className = "modal";
+    m.innerHTML = `<div class="modal-box left"><h3>📲 Pe ecranul principal</h3>${ios ? `
+      <ol class="steps"><li>Deschide linkul tău în <b>Safari</b> (nu din WhatsApp sau alt browser).</li>
+      <li>Apasă <b>Partajează</b> – pătratul cu săgeata în sus, jos pe ecran.</li>
+      <li>Derulează și alege <b>Adaugă pe ecranul principal</b>, apoi <b>Adaugă</b>.</li>
+      <li>De acum intri la masă din iconița <b>Poker</b>.</li></ol>` : `
+      <ol class="steps"><li>Deschide linkul tău în <b>Chrome</b>.</li>
+      <li>Apasă cele <b>3 puncte</b> din dreapta sus.</li>
+      <li>Alege <b>Adaugă pe ecranul de pornire</b> (sau <b>Instalează aplicația</b>), apoi <b>Adaugă</b>.</li>
+      <li>De acum intri la masă din iconița <b>Poker</b>.</li></ol>`}<button class="btn wide">Am înțeles</button></div>`;
+    m.onclick = e => { if (e.target === m || e.target.closest("button")) m.remove(); };
+    document.body.appendChild(m);
+  }
+  function hardReload() {
+    try { if (navigator.serviceWorker) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.update())); } catch (_) {}
+    location.reload();
+  }
+  function checkVersion() {
+    if (!S || !S.appVersion) return;
+    if (!loadedVersion) { loadedVersion = S.appVersion; return; }
+    if (S.appVersion !== loadedVersion && !updateShown) {
+      updateShown = true;
+      const b = document.createElement("div"); b.className = "updbar";
+      b.innerHTML = `<span>✨ Există o versiune nouă a jocului.</span><button class="btn small primary">🔄 Actualizează</button>`;
+      b.querySelector("button").onclick = hardReload;
+      document.body.appendChild(b);
+    }
+  }
+
+  // ---------- notificări pe telefon, vibrații, ecran aprins ----------
+  const canPush = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const standalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  let swReg = null, pushSent = false;
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").then(r => { swReg = r; }).catch(() => {});
+  function vib(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch (_) {} }
+  function notifState() {
+    if (!canPush) return isIOS && !standalone ? "ios-home" : "unsupported";
+    return Notification.permission; // "granted" | "denied" | "default"
+  }
+  function urlB64ToUint8(b64) { const pad = "=".repeat((4 - b64.length % 4) % 4); const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...raw].map(c => c.charCodeAt(0))); }
+  async function subscribePush(ask) {
+    if (!canPush || !code || !token) return false;
+    try {
+      if (Notification.permission !== "granted") {
+        if (!ask) return false;
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") { toast("Notificările nu au fost permise. Le poți porni din setările browserului."); return false; }
+      }
+      const reg = swReg || await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        const { key } = await (await fetch("/api/vapid")).json();
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8(key) });
+      }
+      await post("push", { sub: sub.toJSON() });
+      pushSent = true;
+      if (ask) toast("Gata! Primești notificare când e rândul tău.");
+      return true;
+    } catch (err) { if (ask) toast("Notificările nu au putut fi pornite pe acest telefon."); return false; }
+  }
+  function sendVisibility() { if (code && token) post("visible", { visible: document.visibilityState === "visible" }).catch(() => {}); }
+  document.addEventListener("visibilitychange", () => { sendVisibility(); if (document.visibilityState === "visible") keepAwake(); });
+  // ecranul rămâne aprins cât ești la masă
+  let wakeLock = null;
+  async function keepAwake() {
+    if (screen !== "table" || !("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+    try { if (!wakeLock) { wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release", () => { wakeLock = null; }); } } catch (_) {}
+  }
+  function notifHtml() {
+    const st = notifState();
+    if (st === "granted") return `<p class="hint">🔔 Notificările sunt pornite pe acest telefon: primești „E rândul tău” și „Mai ai 10 secunde” chiar dacă ai ieșit din browser.</p>`;
+    if (st === "ios-home") return `<p class="hint">🔔 Pe iPhone, notificările merg doar din aplicația de pe ecranul principal: în Safari apasă <b>Partajează</b> (pătratul cu săgeată) → <b>Adaugă pe ecranul principal</b>, apoi deschide masa de acolo și pornește notificările.</p>`;
+    if (st === "unsupported") return `<p class="hint">Browserul acesta nu permite notificări. Încearcă Chrome (Android) sau aplicația de pe ecranul principal (iPhone).</p>`;
+    if (st === "denied") return `<p class="hint">Notificările sunt blocate pentru acest site. Le poți permite din setările browserului (Setări site → Notificări).</p>`;
+    return `<button class="btn primary" data-act="enablePush">🔔 Pornește notificările pe acest telefon</button><p class="hint">Primești „E rândul tău” și „Mai ai 10 secunde”, cu sunet și vibrație, chiar dacă telefonul e blocat.</p>`;
+  }
+
   // gazda își ține minte lista de jucători și setările (masa se poate reface după o repornire)
   function hostMemory() {
     if (!S || !S.isHost) return;
@@ -181,7 +282,8 @@
     es.onmessage = ev => {
       try {
         const next = JSON.parse(ev.data); next._at = Date.now();
-        prevS = S; S = next; maybeSendAvatar(); hostMemory();
+        prevS = S; S = next; maybeSendAvatar(); hostMemory(); checkVersion();
+        if (!pushSent) { pushSent = true; subscribePush(false).then(ok => { if (!ok) pushSent = false; }); sendVisibility(); }
         try { playDiff(prevS, S); } catch (_) {}
         render();
       } catch (_) {}
@@ -204,7 +306,7 @@
     renderHome(msg || "Masa nu mai există (serverul a fost repornit sau masa a expirat). Creează o masă nouă.");
   }
   function enter(c, t) {
-    code = c; token = t; avatarSent = false;
+    code = c; token = t; avatarSent = false; pushSent = false;
     store.set("poker:" + c, t);
     if (!location.pathname.startsWith("/masa/" + c)) history.replaceState(null, "", "/masa/" + c);
     screen = null;
@@ -229,7 +331,8 @@
           <p class="hint">Devii gazda: alegi setările, pornești jocul și trimiți linkul celorlalți.</p>
           <label class="f">Numele tău<input class="t" id="cName" maxlength="18" value="${esc(name)}" required></label>
           <button class="btn wide">Creează masa</button></form>
-      </div></div>`;
+      </div><div class="share" style="justify-content:center"><button class="btn small" id="homeReload">🔄 Actualizează</button></div></div>`;
+    document.getElementById("homeReload").onclick = hardReload;
     document.getElementById("joinForm").onsubmit = async e => {
       e.preventDefault(); audio();
       const c = document.getElementById("jCode").value.trim().toUpperCase(), n = document.getElementById("jName").value.trim();
@@ -278,6 +381,8 @@
       <div id="inviteArea"></div>
       <div id="botArea"></div>
       <section class="panel"><h2>Poza ta</h2><div id="avatarArea"></div></section>
+      <section class="panel"><h2>Notificări</h2><div id="notifArea"></div></section>
+      <section class="panel"><h2>Aplicația pe telefon</h2><div id="appArea"></div></section>
       <section class="panel"><h2>Locurile la masă</h2><p class="hint">Atinge un loc liber ca să te muți acolo.</p><div class="seatmap" id="seatmap"></div><div id="shuffleArea"></div></section>
       <section class="panel"><h2>Setările mesei</h2><div id="settings"></div></section>
       <div id="startArea"></div>
@@ -384,6 +489,8 @@
   function updateLobby() {
     patch("eventArea", eventHtml());
     patch("inviteArea", inviteHtml());
+    patch("notifArea", notifHtml());
+    patch("appArea", appHtml());
     const bots = S.players.filter(p => p.bot).length;
     patch("botArea", S.isHost ? `<section class="panel"><h2>Joc de test</h2><p class="hint">Adaugă jucători de test (boți) care joacă singuri, ca să încerci jocul fără ceilalți.${bots ? ` La masă sunt ${bots} boți.` : ""}</p>
       <div class="share"><button class="btn" data-act="addbot">+ Adaugă un bot</button>${bots ? `<button class="btn" data-act="removebots">Scoate boții</button>` : ""}</div></section>` : "");
@@ -486,6 +593,10 @@
       else if (a === "score") openDrawer("score");
       else if (a === "avatar") pickAvatar();
       else if (a === "avatarDel") removeAvatar();
+      else if (a === "enablePush") { await subscribePush(true); updateLobby(); }
+      else if (a === "install") doInstall();
+      else if (a === "installHelp") showInstallHelp();
+      else if (a === "reload") hardReload();
       else if (a === "addbot") await post("bot");
       else if (a === "removebots") await post("removebots");
       else if (a === "copyLink") { const l = b.dataset.l; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(l).then(() => toast("Link copiat."), () => toast(l)); else toast(l); }
@@ -531,6 +642,7 @@
 
   // ---------- masa de joc ----------
   function buildTable() {
+    setTimeout(keepAwake, 0);
     $app.onclick = tableClick; $app.oninput = tableInput; $app.onchange = null;
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
@@ -610,7 +722,8 @@
     const a = S.actions;
     if (h && h.id !== lastHandId) { lastHandId = h.id; raiseOpen = false; }
     const myTurn = !!a;
-    if (myTurn && !wasMyTurn) { try { navigator.vibrate && navigator.vibrate(120); } catch (_) {} SND.turn(); }
+    if (myTurn && !wasMyTurn) { vib([200, 100, 200]); SND.turn(); urgentShown = false; }
+    if (!myTurn) setUrgent(false);
     wasMyTurn = myTurn;
     let status = "";
     if (me.pending) status = "Ai cerut să intri în turneu. Aștepți acceptul gazdei…";
@@ -656,6 +769,16 @@
       } else if (S.waitingPlayers) mb += `<div class="waitmsg">Prea mulți jucători stau deoparte. Mâna următoare începe când revin.</div>`;
     }
     patch("mybar", mb);
+  }
+  // ultimele 10 secunde: alarmă, vibrație, ecran roșu
+  let urgentShown = false;
+  function setUrgent(on, secs) {
+    document.body.classList.toggle("urgent", !!on);
+    let b = document.getElementById("urgentBanner");
+    if (on) {
+      if (!b) { b = document.createElement("div"); b.id = "urgentBanner"; b.className = "urgent-banner"; document.body.appendChild(b); }
+      b.textContent = `⏰ ${secs} secunde! E rândul tău`;
+    } else if (b) b.remove();
   }
   function clockText(el) {
     if (S.paused) return S.onBreak ? "Pauză programată" : "Pauză";
@@ -781,6 +904,10 @@
       if (a === "mute") { muted = !muted; store.set("poker:mute", muted ? "1" : "0"); audio(); if (!muted) SND.chips(); const sb = document.querySelector('[data-act="sound"]'); if (sb) sb.textContent = muted ? "🔇" : "🔊"; return updateDrawer(true); }
       if (a === "testSound") { audio(); return SND.win(); }
       if (a === "avatar") return pickAvatar();
+      if (a === "enablePush") { await subscribePush(true); return updateDrawer(true); }
+      if (a === "install") return doInstall();
+      if (a === "installHelp") return showInstallHelp();
+      if (a === "reload") return hardReload();
       if (a === "sitBack") return await post("sit", { mode: "back" });
       if (a === "sitHand") return await post("sit", { mode: "hand" });
       if (a === "sitOut") return await post("sit", { mode: "out" });
@@ -828,6 +955,8 @@
       html = `<div class="hostbox"><h3 class="sub">Sunet</h3>
         <label class="f">Volum <span id="volLbl">${Math.round(volume * 100)}%</span><input type="range" id="volRange" min="0" max="100" value="${Math.round(volume * 100)}"></label>
         <div class="share"><button class="btn" data-act="mute">${muted ? "🔇 Sunetul e oprit · Pornește" : "🔊 Sunetul e pornit · Oprește"}</button><button class="btn" data-act="testSound">Testează</button></div>
+        <h3 class="sub">Notificări</h3>${notifHtml()}
+        <h3 class="sub">Aplicația</h3>${appHtml()}
         <h3 class="sub">Poza ta</h3><div class="share">${avatar(S.players.find(p => p.me), "lg")}<button class="btn" data-act="avatar">Alege o poză</button></div>
         <h3 class="sub">Joc</h3><div class="share">${(() => { const me = S.players.find(p => p.me); return me.sitOut || me.spectator ? `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>` : `<button class="btn" data-act="sitHand">Stau o mână</button><button class="btn" data-act="sitOut">Stau deoparte</button>`; })()}</div>
         <h3 class="sub">Masa</h3><p class="hint">Codul mesei: <b>${esc(S.code)}</b>. Cu linkul tău personal revii oricând la locul tău.</p>
@@ -879,7 +1008,12 @@
         const left = Math.max(0, S.hand.turnLeftMs - el);
         bar.style.width = Math.round(100 * left / S.hand.turnTotalMs) + "%";
         bar.classList.toggle("low", left < 6000);
-        if (S.actions && left < 5500 && left > 0 && Math.floor(left / 1000) !== Math.floor((left + 500) / 1000)) SND.tick();
+        if (S.actions && left > 0 && left <= 10000) {
+          const secs = Math.ceil(left / 1000);
+          if (!urgentShown) { urgentShown = true; SND.alarm(); vib([400, 100, 400, 100, 400]); }
+          else if (Math.floor(left / 1000) !== Math.floor((left + 500) / 1000)) { SND.tick(); if (secs <= 5) vib(120); }
+          setUrgent(true, secs);
+        } else if (!S.actions) setUrgent(false);
       }
     }
     document.querySelectorAll(".emo, .bubble").forEach(x => { if (Date.now() > +x.dataset.until) x.remove(); });

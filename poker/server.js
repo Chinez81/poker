@@ -5,10 +5,17 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Room, DEFAULT_SETTINGS } = require("./engine");
+const Push = require("./push");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC = path.join(__dirname, "public");
 const rooms = new Map();
+// versiunea aplicației: se schimbă când se urcă fișiere noi (telefoanele sunt anunțate să se actualizeze)
+const APP_VERSION = (() => {
+  const h = crypto.createHash("sha1");
+  ["engine.js", "server.js", "public/app.js", "public/style.css", "public/index.html"].forEach(f => { try { h.update(fs.readFileSync(path.join(__dirname, f))); } catch (_) {} });
+  return h.digest("hex").slice(0, 10);
+})();
 const streams = new Map(); // code -> Set of {res, token}
 
 // Linkuri personale semnate: rămân valabile și după ce serverul repornește (masa se reface din link).
@@ -27,6 +34,26 @@ function verify(token) {
   if (!crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(m[2]))) return null;
   try { const d = JSON.parse(fromB64u(m[1])); return d && d.c && d.n ? d : null; } catch (_) { return null; }
 }
+// ---------- notificări pe telefon ----------
+const VAPID = Push.vapidKeys(SECRET);
+const PUSH_SUBJECT = "mailto:poker-intre-prieteni@example.com";
+const pushMsgs = new Map(); // endpoint -> ultimul mesaj
+function wireRoom(room) {
+  room.notify = (p, kind) => {
+    if (!p.push) return;
+    const visible = p.conns > 0 && p.visible !== false;
+    if (visible) return; // e cu ochii pe masă: primește alertele direct în pagină
+    const msg = kind === "10s"
+      ? { title: "⏰ Mai ai 10 secunde!", body: `Masa ${room.code}: decide acum, altfel se face automat check sau fold.`, tag: "turn-" + room.code }
+      : { title: "♠ E rândul tău!", body: `Masa ${room.code}: ai ${room.settings.turnSec} secunde să decizi.`, tag: "turn-" + room.code };
+    msg.url = "/masa/" + room.code + "/" + (p.token.startsWith("s.") ? p.token : "");
+    msg.at = Date.now();
+    pushMsgs.set(p.push.endpoint, msg);
+    Push.sendPush(VAPID, p.push, PUSH_SUBJECT, status => { if (status === 404 || status === 410) { pushMsgs.delete(p.push && p.push.endpoint); p.push = null; } });
+  };
+  return room;
+}
+
 // Masa permanentă a grupului: jucătorii sunt adăugați din start, fiecare cu linkul lui.
 const PRESET = {
   code: "POKER8",
@@ -35,7 +62,7 @@ const PRESET = {
 };
 function ensurePreset() {
   let room = rooms.get(PRESET.code);
-  if (!room) { room = new Room(PRESET.code, null); rooms.set(PRESET.code, room); }
+  if (!room) { room = wireRoom(new Room(PRESET.code, null)); rooms.set(PRESET.code, room); }
   PRESET.roster.forEach(n => {
     const t = sign(PRESET.code, n, n === PRESET.host);
     if (!room.byToken(t) && !room.findByName(n)) room.addPlayer(n, t, false, true);
@@ -50,7 +77,7 @@ function fromSigned(token, code) {
   if (!d || (code && d.c !== code)) return null;
   let room = rooms.get(d.c);
   if (!room && d.c === PRESET.code) room = ensurePreset();
-  if (!room) { room = new Room(d.c, null); rooms.set(d.c, room); room.addLog("Masa a fost refăcută."); }
+  if (!room) { room = wireRoom(new Room(d.c, null)); rooms.set(d.c, room); room.addLog("Masa a fost refăcută."); }
   let p = room.byToken(token);
   if (!p) {
     const same = room.findByName(d.n);
@@ -87,7 +114,7 @@ function broadcast(room) {
   if (!set) return;
   const now = Date.now();
   for (const s of set) {
-    try { s.res.write("data: " + JSON.stringify(room.view(s.token, now)) + "\n\n"); } catch (_) {}
+    try { const vw = room.view(s.token, now); vw.appVersion = APP_VERSION; s.res.write("data: " + JSON.stringify(vw) + "\n\n"); } catch (_) {}
   }
 }
 
@@ -109,6 +136,11 @@ async function api(req, res, url) {
 
   if (req.method === "GET" && route === "defaults") return json(res, 200, DEFAULT_SETTINGS);
 
+  if (req.method === "GET" && route === "vapid") return json(res, 200, { key: VAPID.publicB64 });
+  if (req.method === "GET" && route === "pushmsg") {
+    const msg = pushMsgs.get(String(url.searchParams.get("endpoint") || ""));
+    return json(res, 200, msg && Date.now() - msg.at < 120000 ? msg : { title: "♠ Poker între prieteni", body: "Se întâmplă ceva la masă.", url: "/" });
+  }
   if (req.method === "GET" && route === "avatar") {
     const room = rooms.get(String(url.searchParams.get("code") || "").toUpperCase());
     const p = room && room.players.find(x => x.id === url.searchParams.get("id"));
@@ -150,7 +182,7 @@ async function api(req, res, url) {
   try {
     if (route === "create") {
       const code = newCode();
-      const room = new Room(code, null, body.settings);
+      const room = wireRoom(new Room(code, null, body.settings));
       const name = String(body.name || "").trim().slice(0, 18) || "Gazda";
       const p = room.addPlayer(name, sign(code, name, true), true, true);
       room.hostToken = p.token;
@@ -213,6 +245,13 @@ async function api(req, res, url) {
       }
       case "avatar": room.setAvatar(p, body.data); break;
       case "sit": room.setSit(p, body.mode); break;
+      case "push": {
+        const sub = body.sub;
+        if (sub && typeof sub.endpoint === "string" && /^https:\/\//.test(sub.endpoint)) p.push = { endpoint: sub.endpoint, keys: sub.keys || {} };
+        else p.push = null;
+        return json(res, 200, { ok: true });
+      }
+      case "visible": p.visible = !!body.visible; return json(res, 200, { ok: true });
       case "approve": {
         needHost();
         const target = room.players.find(x => x.id === body.playerId);
