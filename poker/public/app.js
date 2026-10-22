@@ -168,10 +168,10 @@
     if (saved && saved.roomId && saved.roomId !== S.roomId && !S.started) {
       if (restored === S.roomId) return;
       restored = S.roomId;
-      post("restore", { roster: saved.roster, settings: saved.settings }).catch(() => {});
+      post("restore", { roster: saved.roster, settings: saved.v === S.settingsVersion ? saved.settings : null }).catch(() => {});
       return;
     }
-    store.set(key, JSON.stringify({ roster: S.players.map(p => p.name), settings: S.settings, roomId: S.roomId }));
+    store.set(key, JSON.stringify({ roster: S.players.map(p => p.name), settings: S.settings, roomId: S.roomId, v: S.settingsVersion }));
   }
 
   // ---------- conexiune ----------
@@ -198,7 +198,7 @@
   function lost(msg) {
     if (es) es.close();
     if (code) store.del("poker:" + code);
-    if (drawer) { drawer.remove(); drawer = null; }
+    if (drawer) closeDrawer(true);
     S = null; code = null; token = null;
     history.replaceState(null, "", "/");
     renderHome(msg || "Masa nu mai există (serverul a fost repornit sau masa a expirat). Creează o masă nouă.");
@@ -411,7 +411,7 @@
     return `<div class="ro-set">
       <span>Fise la început</span><b>${fmt(s.stack)}</b>
       <span>Durata unui nivel</span><b>${s.levelMin} min</b>
-      <span>Timp de gândire</span><b>${s.turnSec} sec${s.timeBankSec ? ` + ${s.timeBankSec} sec rezervă` : ""}</b>
+      <span>Timp de gândire</span><b>${s.turnSec} sec${s.timeBankSec ? ` + buton de ${s.timeBankSec} sec extra` : ""}</b>
       <span>Dublare blind-uri</span><b>${s.doubleAt3 ? `când rămân ${s.doubleFrom} jucători` : "nu"}</b>
       <span>Reintrare (doar la joc simplu)</span><b>${s.rebuyUntilLevel ? `până la nivelul ${s.rebuyUntilLevel}, de ${s.rebuyMax} ori` : "nu"}</b>
       <span>Intrare în timpul jocului</span><b>${s.lateEntry ? "da" : "nu"}</b>
@@ -425,7 +425,7 @@
     let h = `${inGame ? `<p class="hint">Modificările se aplică de la mâna sau nivelul următor. Fisele de început contează pentru cine intră sau reintră.</p>` : ""}
     <h3 class="sub">Jocul</h3><div class="settings">
       ${num("stack", "Fise la început", 100, 100)}${num("levelMin", "Durata unui nivel (minute)", 1, 0.5)}
-      ${num("turnSec", "Timp de gândire (secunde)", 5, 5)}${num("timeBankSec", "Timp suplimentar pe joc (secunde, 0 = fără)", 0, 5)}
+      ${num("turnSec", "Timp de gândire (secunde)", 5, 5)}${num("timeBankSec", "Buton timp extra (secunde, o dată pe mână, 0 = fără)", 0, 5)}
       ${num("nextHandSec", "Pauză între mâini (secunde)", 2, 1)}</div>
     <h3 class="sub">Blind-uri</h3>
     <label class="switch"><input type="checkbox" data-k="doubleAt3" ${d.doubleAt3 ? "checked" : ""}> Dublează blind-urile la fiecare nivel când rămân
@@ -526,7 +526,7 @@
     $app.onclick = tableClick; $app.oninput = tableInput; $app.onchange = null;
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
-        <button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button></div>
+        <button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
       <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
   }
@@ -550,6 +550,7 @@
     patch("tbBlinds", S.blinds ? `${fmt(S.blinds.sb)}/${fmt(S.blinds.bb)}${S.ante ? ` <small>ante ${fmt(S.ante)}</small>` : ""}` : "");
     patch("tbMeta", `${S.event && S.event.type === "turneu" ? `Turneu · jocul ${S.gameNo}/${S.event.totalGames}` : "Joc simplu"} · Nivelul ${S.level} · ${S.aliveCount} în joc${S.rebuyOpen ? " · reintrare deschisă" : ""}`);
     patch("tbClock", clockText(0));
+    patch("hostBtn", S.isHost ? `<button class="iconbtn hostmenu" data-act="hostmenu" aria-label="Meniul gazdei">☰</button>` : "");
     const unread = Math.max(0, S.chat.length - seenChat);
     patch("chatBadge", unread && !(drawer && drawerTab === "chat") ? `<span class="badge">${unread}</span>` : "");
     // locuri: eu jos, ceilalți în jurul mesei
@@ -593,11 +594,11 @@
     else if (S.myHand) status = esc(S.myHand);
     else if (me.cards) status = "Cărțile tale";
     else status = "Aștepți mâna următoare";
-    const sub = `Fise: ${fmt(me.chips)}${S.settings.timeBankSec ? ` · Timp extra: ${Math.round((S.myBankMs || 0) / 1000)} s` : ""}`;
+    const sub = `Fise: ${fmt(me.chips)}`;
     let mb = `<div class="myrow"><div class="mycards">${me.cards && h ? me.cards.map((x, j) => card(x, "lg", winCards, `${h.id}-me-${j}`)).join("") : ""}</div>
       <div class="myinfo"><div class="h">${status}</div><div class="s num">${sub}</div></div>
-      <div class="mybtns"><button class="iconbtn" data-act="emojiToggle" aria-label="Reacții">😀</button>
-      ${S.isHost ? `<button class="iconbtn" data-act="pause" aria-label="${S.paused ? "Continuă" : "Pauză"}">${S.paused ? "▶" : "⏸"}</button>` : ""}</div></div>`;
+      <div class="mybtns">${h && h.canExtra ? `<button class="iconbtn extra" data-act="extra">⏱ +${S.settings.timeBankSec} s</button>` : ""}<button class="iconbtn" data-act="emojiToggle" aria-label="Reacții">😀</button>
+      ${S.isHost ? `<button class="iconbtn" data-act="pause" aria-label="${S.paused ? "Continuă" : "Pauză"}">${S.paused ? "▶" : "❚❚"}</button>` : ""}</div></div>`;
     if (emojiOpen) mb += `<div class="emojirow">${S.emojis.map(e => `<button data-act="emoji" data-e="${e}">${e}</button>`).join("")}</div>`;
     if (a) {
       if (raiseOpen && a.canRaise) {
@@ -646,9 +647,12 @@
     if (!b || b.disabled) return;
     const a = b.dataset.act;
     try {
+      if (a === "drawer" && drawer) return closeDrawer();
       if (a === "drawer") return openDrawer(S.isHost ? drawerTab : (drawerTab === "host" ? "chat" : drawerTab));
       if (a === "score") return openDrawer("score");
       if (a === "sound") return openDrawer("me");
+      if (a === "hostmenu") return openDrawer("host");
+      if (a === "extra") { b.disabled = true; return await post("extra"); }
       if (a === "pause") return await post("pause");
       if (a === "emojiToggle") { emojiOpen = !emojiOpen; return updateTable(); }
       if (a === "emoji") { emojiOpen = false; updateTable(); return await post("emoji", { e: b.dataset.e }); }
@@ -681,8 +685,12 @@
       drawer = document.createElement("div");
       drawer.className = "drawer";
       drawer.innerHTML = `<div class="hd"><div class="tabs" id="dTabs"></div><button class="iconbtn" data-close aria-label="Închide">✕</button></div>
-        <div class="body" id="dBody"></div><form id="chatForm"><input id="chatIn" maxlength="200" placeholder="Scrie un mesaj…" autocomplete="off"><button class="btn primary">Trimite</button></form>`;
+        <div class="body" id="dBody"></div><form id="chatForm"><input id="chatIn" maxlength="200" placeholder="Scrie un mesaj…" autocomplete="off"><button class="btn primary">Trimite</button></form>
+        <div class="closebar"><button class="btn" data-close>Închide și întoarce-te la masă</button></div>`;
+      const bd = document.createElement("div"); bd.className = "backdrop"; bd.onclick = closeDrawer;
+      document.body.appendChild(bd); drawer._bd = bd;
       document.body.appendChild(drawer);
+      try { history.pushState({ drawer: 1 }, ""); } catch (_) {}
       drawer.onclick = drawerClick;
       drawer.oninput = e => {
         if (e.target.id === "volRange") { volume = Number(e.target.value) / 100; store.set("poker:vol", String(volume)); audio(); const l = drawer.querySelector("#volLbl"); if (l) l.textContent = Math.round(volume * 100) + "%"; return; }
@@ -700,8 +708,18 @@
     if (screen === "table" && !draftDirty) draft = JSON.parse(JSON.stringify(S.settings));
     updateDrawer(true);
   }
+  function closeDrawer(fromBack) {
+    if (!drawer) return;
+    const a = document.activeElement; if (a && a.blur) a.blur();
+    if (drawer._bd) drawer._bd.remove();
+    drawer.remove(); drawer = null;
+    if (fromBack !== true) { try { if (history.state && history.state.drawer) history.back(); } catch (_) {} }
+    if (screen === "table") updateTable();
+  }
+  window.addEventListener("popstate", () => { if (drawer) closeDrawer(true); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && drawer) closeDrawer(); });
   async function drawerClick(e) {
-    if (e.target.closest("[data-close]")) { drawer.remove(); drawer = null; if (screen === "table") updateTable(); return; }
+    if (e.target.closest("[data-close]")) return closeDrawer();
     const t = e.target.closest("[data-t]"); if (t) { drawerTab = t.dataset.t; return updateDrawer(true); }
     const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
     const a = b.dataset.act;
@@ -718,6 +736,7 @@
       if (a === "pause") return await post("pause");
       if (a === "stop") { if (confirmed("stop", b)) { await post("stop"); toast("Jocul a fost încheiat."); } return; }
       if (a === "restart") { if (confirmed("restart", b)) { await post("restart"); toast("Jocul a fost reînceput."); } return; }
+      if (a === "abort") { if (confirmed("abort", b)) { await post("abort"); closeDrawer(); } return; }
       if (a === "kick") { if (confirmed("kick" + b.dataset.id, b, "Sigur?")) await post("kick", { playerId: b.dataset.id }); return; }
       if (a === "makehost") return await post("makehost", { playerId: b.dataset.id });
       if (a === "setchips") {
@@ -728,9 +747,18 @@
       }
     } catch (err) { toast(err.message); }
   }
+  function handsHtml() {
+    const list = (S.handLog || []).slice().reverse();
+    if (!list.length) return `<p class="hint">Aici apar mâinile jucate: cărțile de pe masă, cărțile arătate și cine a câștigat.</p>`;
+    return `<p class="hint">Cărțile apar doar dacă au fost arătate. Cine câștigă fără să i se plătească pariul poate să nu le arate.</p>` + list.map(x => `<div class="handrec">
+      <div class="hr-top"><b>Mâna #${x.id}</b><span class="muted">Jocul ${x.gameNo} · ${fmt(x.blinds.sb)}/${fmt(x.blinds.bb)}</span></div>
+      <div class="hr-board">${x.board.length ? x.board.map(c => card(c, "sm")).join("") : '<span class="muted">fără flop</span>'}</div>
+      <div class="hr-pl">${x.players.map(p => `<div class="hr-row ${p.won ? "won" : ""}"><span class="nm">${esc(p.name)}</span><span class="cs">${p.cards ? p.cards.map(c => card(c, "sm")).join("") : `<span class="muted">${p.folded ? "pas" : "nearătate"}</span>`}</span><span class="num">${p.won ? "+" + fmt(p.won - p.put) : (p.put ? "−" + fmt(p.put) : "")}</span></div>`).join("")}</div>
+      <div class="hr-msg">${x.msgs.map(esc).join("<br>")}</div></div>`).join("");
+  }
   function updateDrawer(force) {
     if (!drawer || !S) return;
-    const tabs = [["chat", "Chat"], ["score", "Punctaj"], ["log", "Jurnal"], ["me", "Eu"]];
+    const tabs = [["chat", "Chat"], ["score", "Punctaj"], ["hands", "Mâini"], ["log", "Jurnal"], ["me", "Eu"]];
     if (S.isHost && screen === "table") tabs.push(["host", "Gazdă"]);
     if (!tabs.some(t => t[0] === drawerTab)) drawerTab = "chat";
     patch("dTabs", tabs.map(([k, l]) => `<button data-t="${k}" class="${k === drawerTab ? "on" : ""}">${l}</button>`).join(""), drawer);
@@ -739,6 +767,7 @@
     let html = "";
     if (drawerTab === "chat") html = S.chat.length ? S.chat.map(c => `<div class="msg"><b>${esc(c.from)}:</b> ${esc(c.m)}</div>`).join("") : `<p class="hint">Niciun mesaj încă.</p>`;
     else if (drawerTab === "score") html = scoreHtml();
+    else if (drawerTab === "hands") html = handsHtml();
     else if (drawerTab === "log") html = S.log.map(l => `<div class="lg">${esc(l.m)}</div>`).join("");
     else if (drawerTab === "me") {
       html = `<div class="hostbox"><h3 class="sub">Sunet</h3>
@@ -753,7 +782,8 @@
       html = `<div class="hostbox">
         <div class="share"><button class="btn" data-act="pause">${S.paused ? "▶ Continuă jocul" : "⏸ Pune pauză"}</button></div>
         <div class="share"><button class="btn" data-act="stop" data-label="Încheie jocul acum">Încheie jocul acum</button><button class="btn red" data-act="restart" data-label="Reîncepe de la zero">Reîncepe de la zero</button></div>
-        <p class="hint">„Încheie” face clasamentul după fise. „Reîncepe” anulează jocul și împarte din nou fisele tuturor.</p>
+        <button class="btn" data-act="abort" data-label="Oprește și mergi la meniul inițial">Oprește și mergi la meniul inițial</button>
+        <p class="hint">„Încheie” face clasamentul după fise. „Reîncepe” anulează jocul și împarte din nou fisele tuturor. „Meniul inițial” oprește jocul fără rezultat: acolo alegi alt joc sau turneu și schimbi orice setare.</p>
         <h3 class="sub">Joc sau turneu nou</h3>
         <div class="chooser">
           <div class="seg2"><button class="${evType === "simplu" ? "on" : ""}" data-act="evType" data-v="simplu">Joc simplu</button><button class="${evType === "turneu" ? "on" : ""}" data-act="evType" data-v="turneu">Turneu</button></div>
@@ -768,14 +798,14 @@
     if (force || body._html !== html) {
       const a = document.activeElement;
       if (!force && a && body.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
-      const keepScroll = drawerTab !== "chat" && drawerTab !== "log";
+      const keepScroll = drawerTab !== "chat" && drawerTab !== "log" && drawerTab !== "hands";
       const openDet = [...body.querySelectorAll("details.evbox")].map(d => d.open);
       const st = body.scrollTop;
       const typed = {}; body.querySelectorAll("input[data-chips]").forEach(i => { if (i.value) typed[i.dataset.chips] = i.value; });
       body._html = html; body.innerHTML = html;
       Object.entries(typed).forEach(([id, v]) => { const i = body.querySelector(`input[data-chips="${id}"]`); if (i) i.value = v; });
       if (drawerTab === "score" && openDet.length) body.querySelectorAll("details.evbox").forEach((d, i) => { if (openDet[i] !== undefined) d.open = openDet[i]; });
-      body.scrollTop = keepScroll ? st : body.scrollHeight;
+      body.scrollTop = keepScroll ? st : (drawerTab === "hands" ? (force ? 0 : st) : body.scrollHeight);
     }
     if (drawerTab === "chat") seenChat = S.chat.length;
   }

@@ -201,6 +201,8 @@ async function api(req, res, url) {
       }
       case "start": needHost(); if (room.started && !room.finished) throw new Error("Jocul a început deja."); room.start(now); break;
       case "restart": needHost(); room.restart(now); break;
+      case "abort": needHost(); if (room.started && !room.finished) { room.abortGame(); room.addLog("Gazda a oprit jocul (fără rezultat) și s-a întors la meniul inițial."); } break;
+      case "extra": room.extraTime(p.token, now); break;
       case "event": {
         needHost();
         room.newEvent(body.type, body.scoring, body.totalGames, now);

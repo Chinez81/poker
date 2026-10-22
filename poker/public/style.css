@@ -276,3 +276,34 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .pl .nm { flex: 1 1 110px; }
 .pl .tag { white-space: nowrap; }
 a.btn { color: var(--fg); }
+
+/* meniul lateral: butonul de închidere mereu vizibil */
+.drawer .hd { gap: 8px; }
+.drawer .tabs { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; gap: 6px; }
+.drawer .tabs button { padding: 6px 10px; font-size: 14px; }
+.drawer [data-close] { flex: none; font-size: 18px; padding: 8px 12px; background: var(--red); color: #fff; border-color: var(--red); }
+.backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 19; }
+.drawer .closebar { padding: 8px 12px 12px; border-top: 1px solid var(--line); }
+.drawer .closebar button { width: 100%; }
+.drawer { width: min(380px, 86%); }
+.drawer form input { min-width: 0; } .drawer form .btn { flex: none; }
+.iconbtn.hostmenu { background: var(--gold); color: #1d1606; border-color: var(--gold); font-size: 18px; padding: 4px 12px; }
+.iconbtn.extra { background: #1f3f66; border-color: #5aa9ff; color: #fff; }
+.handrec { background: var(--room-2); border: 1px solid var(--line); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.hr-top { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
+.hr-board { display: flex; gap: 4px; flex-wrap: wrap; }
+.hr-pl { display: flex; flex-direction: column; gap: 4px; }
+.hr-row { display: grid; grid-template-columns: 1fr auto 70px; gap: 8px; align-items: center; font-size: 14px; }
+.hr-row .cs { display: flex; gap: 3px; }
+.hr-row .num { text-align: right; color: var(--muted); }
+.hr-row.won .nm, .hr-row.won .num { color: var(--ok); font-weight: 700; }
+.hr-msg { font-size: 13px; color: var(--gold); }
+.topbar { flex-wrap: nowrap; }
+.topbar .iconbtn { padding: 6px 9px; }
+[hidden] { display: none !important; }
+@media (max-width: 600px) {
+  .topbar .meta { display: none; }
+  .topbar .bl { font-size: 20px; }
+  .topbar .clock { font-size: 14px; }
+  .topbar .lvl { gap: 2px 10px; }
+}

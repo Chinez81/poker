@@ -71,15 +71,16 @@ function handName(score) {
 // ---------- setări ----------
 const TABLE_COLORS = ["verde", "albastru", "rosu", "mov", "negru"];
 const EMOJIS = ["👍", "👏", "😂", "😮", "😡", "😭", "🔥", "🍀", "🤝", "💰"];
+const SETTINGS_VERSION = 3;
 const DEFAULT_SETTINGS = {
   stack: 50000,
   levelMin: 6,
-  structure: [[250, 500], [500, 1000], [750, 1500], [1000, 2000], [1500, 3000], [2000, 4000], [3000, 6000], [4000, 8000], [6000, 12000], [8000, 16000], [10000, 20000], [15000, 30000], [20000, 40000], [30000, 60000], [50000, 100000]],
+  structure: Array.from({ length: 30 }, (_, i) => [500 * (i + 1), 1000 * (i + 1)]), // 500/1.000, 1.000/2.000 … 15.000/30.000
   doubleAt3: true,
   doubleFrom: 3,
-  turnSec: 30,
-  timeBankSec: 30,
-  nextHandSec: 6,
+  turnSec: 20,
+  timeBankSec: 20,
+  nextHandSec: 4,
   maxPlayers: 10,
   pointsEnabled: true,
   antePct: 0,
@@ -432,7 +433,6 @@ class Room {
     if (this.paused) throw new Error("Jocul este pe pauză.");
     if (h.toAct !== token) throw new Error("Nu este rândul tău.");
     const p = this.byToken(token);
-    if (h.usingBank) p.bank = Math.max(0, h.deadline - now);
     const owe = h.currentBet - h.bet[token];
     const maxTo = h.bet[token] + p.chips;
     const raiseTo = R => {
@@ -478,10 +478,26 @@ class Room {
     this.addLog(`${p.name}: ${h.last[token]}`);
     this.progress(now);
   }
+  // butonul „+20 s”: o dată pe mână, doar când e rândul tău
+  extraTime(token, now) {
+    const h = this.hand, p = this.byToken(token);
+    if (!h || h.done || h.toAct !== token || !p) throw new Error("Poți cere timp extra doar când e rândul tău.");
+    if (!this.settings.timeBankSec) throw new Error("Gazda a dezactivat timpul extra.");
+    h.extraUsed = h.extraUsed || {};
+    if (h.extraUsed[token]) throw new Error("Ai folosit deja timpul extra la mâna aceasta.");
+    h.extraUsed[token] = true;
+    h.deadline = Math.max(h.deadline, now) + this.settings.timeBankSec * 1000;
+    h.usingBank = true;
+    this.addLog(`${p.name} cere ${this.settings.timeBankSec} secunde în plus.`);
+  }
   show(token) {
     const h = this.hand, p = this.byToken(token);
     if (!h || !h.done || !h.holes[token] || !p) throw new Error("Poți arăta cărțile doar după ce se termină mâna.");
-    if (!h.reveal[token]) { h.reveal[token] = h.holes[token]; this.addLog(`${p.name} își arată cărțile.`); }
+    if (!h.reveal[token]) {
+      h.reveal[token] = h.holes[token]; this.addLog(`${p.name} își arată cărțile.`);
+      const arch = this.handLog && this.handLog.find(x => x.id === h.id);
+      if (arch) { const e = arch.players.find(x => x.name === p.name); if (e) e.cards = h.holes[token]; }
+    }
   }
 
   progress(now) {
@@ -567,6 +583,13 @@ class Room {
     });
     msgs.forEach(m => this.addLog(m + "."));
     this.lastResult = { handId: h.id, msgs, pots: results, showdown };
+    // arhiva mâinilor: doar cărțile arătate (cine nu a fost plătit nu e obligat să arate)
+    this.handLog = this.handLog || [];
+    this.handLog.push({
+      id: h.id, gameNo: this.gameNo, at: now, board: h.board.slice(), msgs, blinds: { ...this.blinds },
+      players: h.seats.map(t => { const p = this.byToken(t); return p ? { name: p.name, cards: h.reveal[t] || null, folded: h.folded.has(t), won: won[t] || 0, put: h.contrib[t] } : null; }).filter(Boolean),
+    });
+    if (this.handLog.length > 40) this.handLog.shift();
     // eliminări
     const busted = h.seats.map(t => this.byToken(t)).filter(p => p && p.chips === 0 && !p.out && !p.leaving);
     if (busted.length) {
@@ -663,11 +686,7 @@ class Room {
       const offline = p && p.conns === 0;
       const limit = offline ? Math.min(h.deadline, h.turnStart + 4000) : h.deadline;
       if (now >= limit) {
-        if (!offline && !h.usingBank && p.bank > 999) {
-          h.usingBank = true; h.turnStart = now; h.deadline = now + p.bank; changed = true;
-          this.addLog(`${p.name} folosește timpul suplimentar.`);
-        } else {
-          if (h.usingBank) p.bank = 0;
+        {
           const owe = h.currentBet - h.bet[h.toAct];
           p.timeouts++;
           this.addLog(`${p.name} nu a acționat la timp.`);
@@ -733,7 +752,8 @@ class Room {
       gameNo: this.gameNo, blinds: this.blinds, ante: this.started ? this.anteNow() : 0,
       nextBlinds: this.started ? this.upcomingBlinds() : null, level: this.level + 1,
       levelLeftMs: this.started && !this.finished ? Math.max(0, left ? left.level : this.levelEndsAt - now) : 0,
-      aliveCount: this.alive().length, waitingPlayers: !!this.waitingPlayers, roomId: this.createdAt,
+      aliveCount: this.alive().length, waitingPlayers: !!this.waitingPlayers, settingsVersion: SETTINGS_VERSION,
+      handLog: (this.handLog || []).slice(-25), roomId: this.createdAt,
       rebuyOpen: this.rebuyOpen(),
       canRebuy: !!(me && me.out && this.rebuyOpen() && me.rebuys < this.settings.rebuyMax),
       myBankMs: me ? me.bank : 0,
@@ -743,6 +763,7 @@ class Room {
         id: h.id, board: h.board, street: h.street, pot, done: h.done, currentBet: h.currentBet, ante: h.ante,
         turnLeftMs: h.toAct ? Math.max(0, left ? left.turn : h.deadline - now) : 0,
         turnTotalMs: h.usingBank ? Math.max(1, (h.deadline - h.turnStart)) : this.settings.turnSec * 1000,
+        canExtra: !!(h.toAct === token && !h.done && this.settings.timeBankSec && !(h.extraUsed && h.extraUsed[token])),
       } : null,
       actions, myHand,
       lastResult: this.lastResult,
@@ -754,4 +775,4 @@ class Room {
   }
 }
 
-module.exports = { Room, DEFAULT_SETTINGS, sanitizeSettings, best7, score5, cmp, handName, newDeck, EMOJIS, TABLE_COLORS };
+module.exports = { SETTINGS_VERSION, Room, DEFAULT_SETTINGS, sanitizeSettings, best7, score5, cmp, handName, newDeck, EMOJIS, TABLE_COLORS };
