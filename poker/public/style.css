@@ -307,3 +307,4 @@ a.btn { color: var(--fg); }
   .topbar .clock { font-size: 14px; }
   .topbar .lvl { gap: 2px 10px; }
 }
+.seat .act { top: auto; bottom: -11px; z-index: 3; }

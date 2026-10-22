@@ -98,7 +98,7 @@ function serveStatic(req, res) {
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, buf) => {
     if (err) { res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }); return res.end("Pagina nu există."); }
-    res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": p === "/index.html" ? "no-cache" : "public, max-age=300" });
+    res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-cache" });
     res.end(buf);
   });
 }
@@ -201,6 +201,8 @@ async function api(req, res, url) {
       }
       case "start": needHost(); if (room.started && !room.finished) throw new Error("Jocul a început deja."); room.start(now); break;
       case "restart": needHost(); room.restart(now); break;
+      case "bot": needHost(); if (room.players.length >= room.settings.maxPlayers) throw new Error("Masa este plină."); room.addBot(); break;
+      case "removebots": needHost(); room.removeBots(now); break;
       case "abort": needHost(); if (room.started && !room.finished) { room.abortGame(); room.addLog("Gazda a oprit jocul (fără rezultat) și s-a întors la meniul inițial."); } break;
       case "extra": room.extraTime(p.token, now); break;
       case "event": {
@@ -225,7 +227,7 @@ async function api(req, res, url) {
           n = String(n || "").trim().slice(0, 18);
           if (n && !room.findByName(n) && room.players.length < room.settings.maxPlayers) room.addPlayer(n, sign(room.code, n, false), false, true);
         });
-        if (body.settings && !(room.started && !room.finished)) room.settings = require("./engine").sanitizeSettings(body.settings, room.settings);
+        if (body.settings && body.v === require("./engine").SETTINGS_VERSION && !(room.started && !room.finished)) room.settings = require("./engine").sanitizeSettings(body.settings, room.settings);
         break;
       }
       case "stop": needHost(); room.stopGame(now); break;

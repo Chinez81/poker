@@ -168,10 +168,10 @@
     if (saved && saved.roomId && saved.roomId !== S.roomId && !S.started) {
       if (restored === S.roomId) return;
       restored = S.roomId;
-      post("restore", { roster: saved.roster, settings: saved.v === S.settingsVersion ? saved.settings : null }).catch(() => {});
+      post("restore", { roster: saved.roster, settings: saved.v === S.settingsVersion ? saved.settings : null, v: saved.v }).catch(() => {});
       return;
     }
-    store.set(key, JSON.stringify({ roster: S.players.map(p => p.name), settings: S.settings, roomId: S.roomId, v: S.settingsVersion }));
+    store.set(key, JSON.stringify({ roster: S.players.filter(p => !p.bot).map(p => p.name), settings: S.settings, roomId: S.roomId, v: S.settingsVersion }));
   }
 
   // ---------- conexiune ----------
@@ -276,6 +276,7 @@
       <div id="results"></div>
       <section class="panel"><h2>Jucători <span class="aside" id="pcount"></span></h2><div class="plist" id="plist"></div><div id="mySit"></div></section>
       <div id="inviteArea"></div>
+      <div id="botArea"></div>
       <section class="panel"><h2>Poza ta</h2><div id="avatarArea"></div></section>
       <section class="panel"><h2>Locurile la masă</h2><p class="hint">Atinge un loc liber ca să te muți acolo.</p><div class="seatmap" id="seatmap"></div><div id="shuffleArea"></div></section>
       <section class="panel"><h2>Setările mesei</h2><div id="settings"></div></section>
@@ -372,6 +373,7 @@
       if (inGame && p.waiting) tags += '<span class="tag muted">intră la mâna următoare</span>';
       if (inGame && p.leaving) tags += '<span class="tag muted">pleacă</span>';
       if (inGame && p.out) tags += `<span class="tag muted">eliminat</span>`;
+      if (p.bot) tags += `<span class="tag muted">bot de test</span>`;
       if (!p.seen) tags += `<span class="tag muted">n-a intrat încă</span>`;
       if (p.sitOut) tags += `<span class="tag muted">stă deoparte</span>`;
       let ctrl = "";
@@ -382,6 +384,9 @@
   function updateLobby() {
     patch("eventArea", eventHtml());
     patch("inviteArea", inviteHtml());
+    const bots = S.players.filter(p => p.bot).length;
+    patch("botArea", S.isHost ? `<section class="panel"><h2>Joc de test</h2><p class="hint">Adaugă jucători de test (boți) care joacă singuri, ca să încerci jocul fără ceilalți.${bots ? ` La masă sunt ${bots} boți.` : ""}</p>
+      <div class="share"><button class="btn" data-act="addbot">+ Adaugă un bot</button>${bots ? `<button class="btn" data-act="removebots">Scoate boții</button>` : ""}</div></section>` : "");
     const mine = S.players.find(p => p.me);
     patch("mySit", `<label class="switch"><input type="checkbox" data-act="sitToggle" ${mine.sitOut ? "checked" : ""}> Nu joc jocul următor (stau deoparte)</label>`);
     patch("results", resultsHtml());
@@ -432,7 +437,7 @@
       <input class="t num mini" type="number" data-k="doubleFrom" value="${d.doubleFrom}" min="2" max="9"> jucători</label>
     <div><div class="lvhead"><span>Nivel</span><span>Small blind</span><span>Big blind</span><span></span></div><div class="levels">`;
     d.structure.forEach((l, i) => h += `<div class="lv"><span class="n">${i + 1}</span><input type="number" inputmode="numeric" data-lv="${i}" data-j="0" value="${l[0]}"><input type="number" inputmode="numeric" data-lv="${i}" data-j="1" value="${l[1]}"><button class="x" data-act="dellv" data-i="${i}" aria-label="Șterge nivelul ${i + 1}">×</button></div>`);
-    h += `</div></div><div class="share"><button class="btn small" data-act="addlv">+ Adaugă nivel</button><button class="btn small" data-act="resetlv">Structura standard</button></div>
+    h += `</div></div><div class="share"><button class="btn small" data-act="addlv">+ Adaugă nivel</button><button class="btn small" data-act="resetlv">Structura standard</button><button class="btn small" data-act="resetall">Toate setările standard</button></div>
       <p class="hint">După ultimul nivel, blind-urile se dublează automat.</p>
     <h3 class="sub">Intrări și reintrări</h3>
     <label class="switch"><input type="checkbox" data-k="lateEntry" ${d.lateEntry ? "checked" : ""}> Se poate intra la masă și în timpul jocului (primește cărți de la mâna următoare)</label>
@@ -463,6 +468,7 @@
     if (a === "addlv") { const l = draft.structure[draft.structure.length - 1] || [250, 500]; draft.structure.push([l[0] * 2, l[1] * 2]); draftDirty = true; }
     else if (a === "dellv") { if (draft.structure.length > 1) { draft.structure.splice(+b.dataset.i, 1); draftDirty = true; } }
     else if (a === "resetlv") { const d = await (await fetch("/api/defaults")).json(); draft.structure = d.structure; draftDirty = true; }
+    else if (a === "resetall") { const d = await (await fetch("/api/defaults")).json(); await post("settings", { settings: d }); draft = JSON.parse(JSON.stringify(d)); draftDirty = false; toast("Setările standard au fost puse."); }
     else if (a === "saveSettings") { await post("settings", { settings: draft }); draftDirty = false; toast("Setările au fost salvate."); }
     else return false;
     if (screen === "lobby") updateLobby();
@@ -480,6 +486,8 @@
       else if (a === "score") openDrawer("score");
       else if (a === "avatar") pickAvatar();
       else if (a === "avatarDel") removeAvatar();
+      else if (a === "addbot") await post("bot");
+      else if (a === "removebots") await post("removebots");
       else if (a === "copyLink") { const l = b.dataset.l; if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(l).then(() => toast("Link copiat."), () => toast(l)); else toast(l); }
       else if (a === "sitToggle") await post("sit", { mode: b.checked ? "out" : "back" });
       else if (a === "drawer") openDrawer("chat");
@@ -736,6 +744,8 @@
       if (a === "pause") return await post("pause");
       if (a === "stop") { if (confirmed("stop", b)) { await post("stop"); toast("Jocul a fost încheiat."); } return; }
       if (a === "restart") { if (confirmed("restart", b)) { await post("restart"); toast("Jocul a fost reînceput."); } return; }
+      if (a === "addbot") return await post("bot");
+      if (a === "removebots") return await post("removebots");
       if (a === "abort") { if (confirmed("abort", b)) { await post("abort"); closeDrawer(); } return; }
       if (a === "kick") { if (confirmed("kick" + b.dataset.id, b, "Sigur?")) await post("kick", { playerId: b.dataset.id }); return; }
       if (a === "makehost") return await post("makehost", { playerId: b.dataset.id });
@@ -791,6 +801,7 @@
           <label class="switch"><input type="checkbox" id="evScoring" ${evScoring ? "checked" : ""}> Cu punctaj</label>
           <button class="btn primary" data-act="newEventNow" data-label="Pornește acum">Pornește acum</button>
           <p class="hint">Jocul în curs se oprește fără rezultat și începe imediat noul ${evType === "turneu" ? "turneu" : "joc"}.</p></div>
+        <div class="share"><button class="btn small" data-act="addbot">+ Bot de test</button>${S.players.some(p => p.bot) ? `<button class="btn small" data-act="removebots">Scoate boții</button>` : ""}</div>
         <h3 class="sub">Jucători</h3><div class="plist">${S.players.map(p => `<div class="pl col"><div class="pl-top"><span class="dot ${p.connected ? "on" : ""}"></span><span class="nm">${esc(p.name)}</span><span class="num muted">${p.out ? "eliminat" : fmt(p.chips)}</span></div>
           <div class="share"><input class="t num mini2" type="number" inputmode="numeric" min="0" placeholder="fise noi" data-chips="${p.id}"><button class="btn small" data-act="setchips" data-id="${p.id}">Setează fisele</button>${p.me ? "" : `<button class="btn small" data-act="kick" data-id="${p.id}" data-label="Scoate">Scoate</button>`}</div></div>`).join("")}</div>
         <h3 class="sub">Setările mesei</h3><div id="hostSettings">${settingsForm(true)}</div></div>`;

@@ -170,6 +170,24 @@ class Room {
     if (!quiet) this.addLog(`${p.name} a fost adăugat la masă.`);
     return p;
   }
+  // jucători de test, care joacă singuri
+  addBot() {
+    let i = 1; while (this.findByName("Bot " + i)) i++;
+    const p = this.addPlayer("Bot " + i, undefined, true, true);
+    p.bot = true; p.conns = 1; p.seen = true;
+    this.addLog(`${p.name} (jucător de test) a intrat la masă.`);
+    return p;
+  }
+  removeBots(now) { this.players.filter(p => p.bot).forEach(p => this.removePlayer(p.token, now)); }
+  botAct(now) {
+    const h = this.hand, t = h.toAct, p = this.byToken(t);
+    const owe = h.currentBet - h.bet[t], r = Math.random();
+    const maxTo = h.bet[t] + p.chips, minTo = Math.min(maxTo, h.currentBet + h.minRaise);
+    if (owe <= 0) return this.act(t, r < 0.75 || maxTo <= h.currentBet ? "check" : "raise", minTo, now);
+    if (r < 0.15 && owe > this.blinds.bb) return this.act(t, "fold", 0, now);
+    if (r > 0.9 && maxTo > h.currentBet) return this.act(t, "raise", minTo, now);
+    return this.act(t, "call", 0, now);
+  }
   findByName(name) { name = String(name || "").trim().toLowerCase(); return this.players.find(p => p.name.toLowerCase() === name); }
   // un jucător își deschide linkul / se reconectează
   onConnect(p) {
@@ -681,6 +699,10 @@ class Room {
     let changed = false;
     if (now >= this.levelEndsAt) { this.nextLevel(now); changed = true; }
     const h = this.hand;
+    if (h && !h.done && h.toAct && this.byToken(h.toAct) && this.byToken(h.toAct).bot) {
+      if (now - h.turnStart > 1400) { this.botAct(now); return true; }
+      return changed;
+    }
     if (h && !h.done && h.toAct) {
       const p = this.byToken(h.toAct);
       const offline = p && p.conns === 0;
@@ -728,7 +750,7 @@ class Room {
         emoji: p.emoji && now - p.emoji.t < 4000 ? { e: p.emoji.e, leftMs: 4000 - (now - p.emoji.t) } : null,
         bubble: p.lastChat && now - p.lastChat.t < 6000 ? { m: p.lastChat.m, leftMs: 6000 - (now - p.lastChat.t) } : null,
         avatarV: p.avatar ? p.avatarV : 0,
-        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen,
+        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot,
         link: (isHost || p.token === token) && p.token.startsWith("s.") ? p.token : null,
       };
     });
