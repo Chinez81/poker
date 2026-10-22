@@ -155,7 +155,6 @@ class Room {
   addPlayer(name, token, quiet, exactName) {
     name = String(name || "").trim().slice(0, 18) || "Jucător";
     const inGame = this.started && !this.finished;
-    if (inGame && !this.settings.lateEntry) throw new Error("Gazda nu permite intrarea în timpul jocului. Încearcă după ce se termină jocul.");
     const taken = new Set(this.players.map(p => p.seat));
     let seat = 0; while (taken.has(seat)) seat++;
     if (seat >= this.settings.maxPlayers) throw new Error("Masa este plină (maximum " + this.settings.maxPlayers + " jucători).");
@@ -163,10 +162,11 @@ class Room {
     if (!exactName) while (this.players.some(p => p.name.toLowerCase() === name.toLowerCase())) name = base + " " + k++;
     const p = {
       token: token || tok(), id: pid(), name, seat, chips: this.settings.stack, out: false, waiting: inGame, place: null,
-      sitOut: false, sitOutOnce: false, autoSit: false, spectator: false, seen: !!quiet,
+      sitOut: false, sitOutOnce: false, autoSit: false, spectator: false, seen: !!quiet, pending: false,
       conns: 0, timeouts: 0, startChips: 0, leaving: false, rebuys: 0, bank: this.settings.timeBankSec * 1000, emoji: null, played: false, lastChat: null, avatar: null, avatarV: 0,
     };
     this.players.push(p);
+    if (inGame && this.isTournament()) { p.waiting = false; p.spectator = true; p.chips = 0; }
     if (!quiet) this.addLog(`${p.name} a fost adăugat la masă.`);
     return p;
   }
@@ -190,11 +190,34 @@ class Room {
   }
   findByName(name) { name = String(name || "").trim().toLowerCase(); return this.players.find(p => p.name.toLowerCase() === name); }
   // un jucător își deschide linkul / se reconectează
+  isTournament() { return !!(this.event && this.event.type === "turneu"); }
+  gameRunning() { return this.started && !this.finished; }
+  // intră în jocul în desfășurare (primește cărți de la mâna următoare)
+  joinRunning(p) {
+    p.spectator = false; p.pending = false; p.waiting = true; p.out = false; p.place = null; p.sitOut = false; p.sitOutOnce = false;
+    p.chips = this.settings.stack; p.bank = this.settings.timeBankSec * 1000;
+  }
+  // la turneu, intrarea în timpul jocului se face doar cu acordul gazdei
+  requestJoin(p) {
+    if (!p.pending) { p.pending = true; this.addLog(`${p.name} cere să intre în turneu. Gazda trebuie să accepte.`); }
+  }
+  approve(p, ok) {
+    if (!p.pending) return;
+    p.pending = false;
+    if (ok && this.gameRunning() && p.spectator) { this.joinRunning(p); this.addLog(`Gazda l-a primit pe ${p.name} în turneu (primește cărți de la mâna următoare).`); }
+    else if (!ok) this.addLog(`Gazda nu a acceptat intrarea lui ${p.name} în turneu.`);
+  }
   onConnect(p) {
     const first = !p.seen;
     p.seen = true;
-    if (first) this.addLog(`${p.name} a intrat la masă${this.started && !this.finished ? (p.waiting ? " (primește cărți de la mâna următoare)" : "") : ""}.`);
     if (p.autoSit) { p.autoSit = false; p.sitOut = false; this.addLog(`${p.name} s-a întors la masă.`); }
+    if (this.gameRunning() && p.spectator && !p.sitOut && !p.out) {
+      if (this.isTournament()) { if (first) this.addLog(`${p.name} a intrat la masă.`); this.requestJoin(p); return; }
+      this.joinRunning(p);
+      this.addLog(`${p.name} a intrat la masă (primește cărți de la mâna următoare).`);
+      return;
+    }
+    if (first) this.addLog(`${p.name} a intrat la masă.`);
   }
   // stau deoparte: "hand" = doar mâna următoare, "out" = până revin, "back" = revin în joc
   setSit(p, mode) {
@@ -204,8 +227,8 @@ class Room {
     p.sitOut = false; p.sitOutOnce = false; p.autoSit = false;
     if (p.spectator) {
       if (inGame) {
-        if (!this.settings.lateEntry) throw new Error("Gazda nu permite intrarea în timpul jocului. Intri de la jocul următor.");
-        p.spectator = false; p.waiting = true; p.out = false; p.place = null; p.chips = this.settings.stack; p.bank = this.settings.timeBankSec * 1000;
+        if (this.isTournament()) { this.requestJoin(p); return; }
+        this.joinRunning(p);
       } else p.spectator = false;
     }
     this.addLog(`${p.name} revine în joc.`);
@@ -381,8 +404,9 @@ class Room {
     if (this.finished) return;
     this.players.forEach(p => { if (p.waiting && !p.out) { p.waiting = false; p.played = true; } });
     const skippers = this.alive().filter(p => p.sitOutOnce);
-    const alive = this.dealable();
-    if (alive.length < 2) {
+    const active = this.dealable();
+    const alive = this.alive().filter(p => p.chips > 0); // toți cei rămași în joc: și cei care stau deoparte plătesc blind-urile
+    if (active.length < 2) {
       if (this.contenders() >= 2) { // jucătorii stau deoparte: așteptăm să revină
         skippers.forEach(p => p.sitOutOnce = false);
         this.waitingPlayers = true; this.nextHandAt = now + 3000;
@@ -412,11 +436,14 @@ class Room {
     };
     order.forEach(p => { h.contrib[p.token] = 0; h.bet[p.token] = 0; });
     for (let r = 0; r < 2; r++) order.forEach(p => { (h.holes[p.token] = h.holes[p.token] || []).push(h.deck.pop()); });
+    const inactive = order.filter(p => p.sitOut || p.sitOutOnce);
     const ante = this.anteNow();
     if (ante) { h.ante = ante; order.forEach(p => { const a = Math.min(ante, p.chips); p.chips -= a; h.contrib[p.token] += a; }); }
     this.put(sbP, Math.min(this.blinds.sb, sbP.chips));
     this.put(bbP, Math.min(this.blinds.bb, bbP.chips));
     h.last[sbP.token] = "SB"; h.last[bbP.token] = "BB";
+    // cine stă deoparte: plătește blind-ul dacă îi vine rândul, apoi cărțile i se aruncă automat
+    inactive.forEach(p => { h.folded.add(p.token); h.last[p.token] = (p === sbP ? "SB · " : p === bbP ? "BB · " : "") + "Deoparte"; });
     h.currentBet = this.blinds.bb;
     h.minRaise = this.blinds.bb;
     this.lastResult = null;
@@ -713,7 +740,7 @@ class Room {
           p.timeouts++;
           this.addLog(`${p.name} nu a acționat la timp.`);
           if (offline && !p.sitOut) { p.sitOut = true; p.autoSit = true; this.addLog(`${p.name} nu e conectat: stă deoparte până revine.`); }
-          this.act(h.toAct, owe > 0 ? "fold" : "check", 0, now);
+          this.act(h.toAct, owe > 0 ? "fold" : "check", 0, now); // timp expirat: check dacă nu ai de plătit, altfel fold
           changed = true;
         }
       }
@@ -750,7 +777,7 @@ class Room {
         emoji: p.emoji && now - p.emoji.t < 4000 ? { e: p.emoji.e, leftMs: 4000 - (now - p.emoji.t) } : null,
         bubble: p.lastChat && now - p.lastChat.t < 6000 ? { m: p.lastChat.m, leftMs: 6000 - (now - p.lastChat.t) } : null,
         avatarV: p.avatar ? p.avatarV : 0,
-        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot,
+        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot, pending: !!p.pending,
         link: (isHost || p.token === token) && p.token.startsWith("s.") ? p.token : null,
       };
     });

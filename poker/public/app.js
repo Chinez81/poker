@@ -419,7 +419,7 @@
       <span>Timp de gândire</span><b>${s.turnSec} sec${s.timeBankSec ? ` + buton de ${s.timeBankSec} sec extra` : ""}</b>
       <span>Dublare blind-uri</span><b>${s.doubleAt3 ? `când rămân ${s.doubleFrom} jucători` : "nu"}</b>
       <span>Reintrare (doar la joc simplu)</span><b>${s.rebuyUntilLevel ? `până la nivelul ${s.rebuyUntilLevel}, de ${s.rebuyMax} ori` : "nu"}</b>
-      <span>Intrare în timpul jocului</span><b>${s.lateEntry ? "da" : "nu"}</b>
+      <span>Intrare în timpul jocului</span><b>joc simplu: direct · turneu: cu acordul gazdei</b>
       <span>Pauze</span><b>${s.breakEveryMin ? `${s.breakMin} min la fiecare ${s.breakEveryMin} min` : "nu"}</b>
       <span>Culoarea mesei</span><b>${COLOR_NAMES[s.tableColor] || s.tableColor}</b></div>
       <p class="hint">Niveluri: ${s.structure.map(l => fmt(l[0]) + "/" + fmt(l[1])).join(" → ")}</p>`;
@@ -440,7 +440,7 @@
     h += `</div></div><div class="share"><button class="btn small" data-act="addlv">+ Adaugă nivel</button><button class="btn small" data-act="resetlv">Structura standard</button><button class="btn small" data-act="resetall">Toate setările standard</button></div>
       <p class="hint">După ultimul nivel, blind-urile se dublează automat.</p>
     <h3 class="sub">Intrări și reintrări</h3>
-    <label class="switch"><input type="checkbox" data-k="lateEntry" ${d.lateEntry ? "checked" : ""}> Se poate intra la masă și în timpul jocului (primește cărți de la mâna următoare)</label>
+    <p class="hint">La jocul simplu, cine se conectează intră direct (de la mâna următoare). La turneu, cine vrea să intre după start îți trimite o cerere pe care o accepți sau o refuzi.</p>
     <div class="settings">${num("rebuyUntilLevel", "Reintrare (doar la joc simplu) până la nivelul (0 = fără)", 0, 1)}${num("rebuyMax", "Câte reintrări are un jucător", 1, 1)}</div>
     <label class="switch"><input type="checkbox" data-k="shuffleSeats" ${d.shuffleSeats ? "checked" : ""}> Amestecă locurile la începutul fiecărui joc</label>
     <h3 class="sub">Pauze</h3>
@@ -535,6 +535,7 @@
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
         <button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
+      <div id="reqArea" class="reqarea"></div>
       <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
   }
@@ -574,6 +575,7 @@
     patch("tbBlinds", S.blinds ? `${fmt(S.blinds.sb)}/${fmt(S.blinds.bb)}${S.ante ? ` <small>ante ${fmt(S.ante)}</small>` : ""}` : "");
     patch("tbMeta", `${S.event && S.event.type === "turneu" ? `Turneu · jocul ${S.gameNo}/${S.event.totalGames}` : "Joc simplu"} · Nivelul ${S.level} · ${S.aliveCount} în joc${S.rebuyOpen ? " · reintrare deschisă" : ""}`);
     patch("tbClock", clockText(0));
+    patch("reqArea", pendingHtml());
     patch("hostBtn", S.isHost ? `<button class="iconbtn hostmenu" data-act="hostmenu" aria-label="Meniul gazdei">☰</button>` : "");
     const unread = Math.max(0, S.chat.length - seenChat);
     patch("chatBadge", unread && !(drawer && drawerTab === "chat") ? `<span class="badge">${unread}</span>` : "");
@@ -592,7 +594,7 @@
       const label = p.spectator ? "Nu joacă" : p.out ? `Locul ${p.place || "–"}` : p.leaving ? "Pleacă" : p.waiting ? "Intră" : (p.usingBank ? "Timp extra" : (p.allin ? "All-in" : (p.last || (p.sitOut ? "Deoparte" : (p.sitOutOnce ? "Pauză o mână" : null)))));
       const emo = p.emoji ? `<span class="emo" data-until="${Date.now() + p.emoji.leftMs}">${esc(p.emoji.e)}</span>` : "";
       const bub = p.bubble ? `<span class="bubble" data-until="${Date.now() + p.bubble.leftMs}">${esc(p.bubble.m)}</span>` : "";
-      seats += `<div class="${cls}" style="left:${q.x}%;top:${q.y}%">${bub}${emo}${cards}${avatar(p, "seatav")}<div class="box">${label ? `<span class="act">${esc(label)}</span>` : ""}${p.dealer ? '<span class="dealer">D</span>' : ""}
+      seats += `<div class="${cls}" data-act="profile" data-id="${p.id}" style="left:${q.x}%;top:${q.y}%">${bub}${emo}${cards}${avatar(p, "seatav")}<div class="box">${label ? `<span class="act">${esc(label)}</span>` : ""}${p.dealer ? '<span class="dealer">D</span>' : ""}
         <div class="nm">${esc(p.name)}</div><div class="ch num">${p.out ? "eliminat" : "● " + fmt(p.chips)}</div>${timer}</div></div>`;
       if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${fmt(p.bet)}</div>`;
     });
@@ -611,7 +613,8 @@
     if (myTurn && !wasMyTurn) { try { navigator.vibrate && navigator.vibrate(120); } catch (_) {} SND.turn(); }
     wasMyTurn = myTurn;
     let status = "";
-    if (me.spectator) status = "Nu joci jocul acesta (privești)";
+    if (me.pending) status = "Ai cerut să intri în turneu. Aștepți acceptul gazdei…";
+    else if (me.spectator) status = "Nu joci jocul acesta (privești)";
     else if (me.out) status = `Ai fost eliminat pe locul ${me.place || "–"}`;
     else if (me.sitOut) status = "Stai deoparte";
     else if (me.leaving) status = "Pleci de la masă după mâna aceasta";
@@ -628,21 +631,23 @@
     if (a) {
       if (raiseOpen && a.canRaise) {
         if (raiseVal < a.minTo || raiseVal > a.maxTo) raiseVal = a.minTo;
-        const pot = h.pot, potTo = Math.min(a.maxTo, a.myBet + a.toCall + (pot + a.toCall));
-        const half = Math.min(a.maxTo, Math.max(a.minTo, a.myBet + a.toCall + Math.round((pot + a.toCall) / 2)));
+        // butoane rapide: mereu 2×, 3×, 4× BB (suma totală a pariului). Dacă pe masă e deja un pariu mai mare, butonul e inactiv.
+        const bb = S.blinds.bb;
+        const presets = [["Min", a.minTo, true]].concat([2, 3, 4].map(k => { const v = Math.min(a.maxTo, k * bb); return [`${k}×BB`, v, v >= a.minTo]; }));
         mb += `<div class="raisebox"><div class="row"><input type="range" id="rRange" min="${a.minTo}" max="${a.maxTo}" step="${Math.max(1, S.blinds.sb)}" value="${raiseVal}"><input class="amt num" id="rAmt" type="number" inputmode="numeric" value="${raiseVal}"></div>
-          <div class="presets"><button class="btn small" data-act="preset" data-v="${a.minTo}">Minim</button><button class="btn small" data-act="preset" data-v="${half}">½ pot</button><button class="btn small" data-act="preset" data-v="${Math.max(a.minTo, potTo)}">Pot</button><button class="btn small" data-act="preset" data-v="${a.maxTo}">All-in</button></div>
-          <div class="acts" style="grid-template-columns:1fr 2fr"><button class="btn" data-act="raiseCancel">Înapoi</button><button class="btn raise" data-act="raiseGo" id="rGo">${a.isBet ? "Bet" : "Raise la"} ${fmt(raiseVal)}</button></div></div>`;
+          <div class="presets">${presets.map(([l, v, ok]) => `<button class="btn small" data-act="preset" data-v="${v}" ${ok ? "" : "disabled"}>${l}<br><span class="pv">${fmt(v)}</span></button>`).join("")}<button class="btn small allin" data-act="preset" data-v="${a.maxTo}">All-in<br><span class="pv">${fmt(a.maxTo)}</span></button></div>
+          <div class="acts" style="grid-template-columns:1fr 2fr"><button class="btn" data-act="raiseCancel">Înapoi</button><button class="btn raise" data-act="raiseGo" id="rGo">${a.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}</button></div></div>`;
       } else {
         const callLbl = a.canCheck ? "Check" : (a.toCall >= me.chips ? `All-in ${fmt(a.toCall)}` : `Call ${fmt(a.toCall)}`);
-        mb += `<div class="acts"><button class="btn fold" data-act="fold">Pas</button><button class="btn call" data-act="${a.canCheck ? "check" : "call"}">${callLbl}</button>
+        mb += `<div class="acts"><button class="btn fold" data-act="fold">Fold</button><button class="btn call" data-act="${a.canCheck ? "check" : "call"}">${callLbl}</button>
           ${a.canRaise ? `<button class="btn raise" data-act="raiseOpen">${a.isBet ? "Bet" : "Raise"}</button>` : `<button class="btn" disabled>Raise</button>`}</div>`;
       }
     } else {
       let extra = "";
       if (S.canShow) extra += `<button class="btn" data-act="show">Arată-mi cărțile</button>`;
       if (S.canRebuy) extra += `<button class="btn primary" data-act="rebuy">Reintră cu ${fmt(S.settings.stack)} fise</button>`;
-      if (me.sitOut || me.spectator) extra += `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>`;
+      if (me.spectator && S.event && S.event.type === "turneu") extra += me.pending ? "" : `<button class="btn primary" data-act="sitBack">Cere să intri în turneu</button>`;
+      else if (me.sitOut || me.spectator) extra += `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>`;
       else if (!me.out) extra += `<button class="btn small" data-act="sitHand" ${me.sitOutOnce ? "disabled" : ""}>${me.sitOutOnce ? "Stai deoparte o mână" : "Stau o mână"}</button><button class="btn small" data-act="sitOut">Stau deoparte</button>`;
       if (extra) mb += `<div class="share" style="justify-content:center">${extra}</div>`;
       if (h && !h.done && me.inHand && !me.folded && !me.out) {
@@ -664,7 +669,7 @@
       const other = document.getElementById(e.target.id === "rRange" ? "rAmt" : "rRange");
       if (other) other.value = raiseVal;
       const go = document.getElementById("rGo");
-      if (go && S.actions) go.textContent = `${S.actions.isBet ? "Bet" : "Raise la"} ${fmt(raiseVal)}`;
+      if (go && S.actions) go.textContent = `${S.actions.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}`;
     }
   }
   async function tableClick(e) {
@@ -677,6 +682,8 @@
       if (a === "score") return openDrawer("score");
       if (a === "sound") return openDrawer("me");
       if (a === "hostmenu") return openDrawer("host");
+      if (a === "profile") return showProfile(b.dataset.id);
+      if (a === "approve" || a === "deny") return await post("approve", { playerId: b.dataset.id, ok: a === "approve" });
       if (a === "extra") { b.disabled = true; return await post("extra"); }
       if (a === "pause") return await post("pause");
       if (a === "emojiToggle") { emojiOpen = !emojiOpen; return updateTable(); }
@@ -691,7 +698,7 @@
       if (a === "preset") {
         raiseVal = +b.dataset.v;
         const r = document.getElementById("rRange"), m2 = document.getElementById("rAmt"); if (r) r.value = raiseVal; if (m2) m2.value = raiseVal;
-        const go = document.getElementById("rGo"); if (go) go.textContent = `${S.actions.isBet ? "Bet" : "Raise la"} ${fmt(raiseVal)}`;
+        const go = document.getElementById("rGo"); if (go) go.textContent = `${S.actions.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}`;
         return;
       }
       if (["fold", "check", "call"].includes(a)) { b.disabled = true; return await post("act", { type: a }); }
@@ -701,6 +708,27 @@
         return await post("act", { type: S.actions && amt >= S.actions.maxTo ? "allin" : "raise", amount: amt });
       }
     } catch (err) { toast(err.message); }
+  }
+
+  // ---------- poza mărită a unui jucător ----------
+  function showProfile(id) {
+    const p = S && S.players.find(x => x.id === id); if (!p) return;
+    const m = document.createElement("div"); m.className = "modal";
+    m.innerHTML = `<div class="modal-box">${p.avatarV ? `<img class="bigav" src="${avatarUrl(p)}" alt="">` : `<div class="bigav init" style="background:hsl(${hue(p.name)} 45% 32%)">${esc(initials(p.name))}</div>`}
+      <h3>${esc(p.name)}</h3><p class="hint">${p.out ? "Eliminat" : p.spectator ? "Nu joacă acum" : `Fise: ${fmt(p.chips)}`}${p.sitOut ? " · stă deoparte" : ""}</p><button class="btn wide">Închide</button></div>`;
+    m.onclick = () => m.remove();
+    document.body.appendChild(m);
+  }
+  // cereri de intrare în turneu (doar gazda le vede)
+  let knownPending = new Set();
+  function pendingHtml() {
+    if (!S || !S.isHost) return "";
+    const list = S.players.filter(p => p.pending);
+    const ids = new Set(list.map(p => p.id));
+    if ([...ids].some(id => !knownPending.has(id))) { SND.turn(); try { navigator.vibrate && navigator.vibrate([100, 60, 100]); } catch (_) {} }
+    knownPending = ids;
+    if (!list.length) return "";
+    return list.map(p => `<div class="reqbar">🔔 <b>${esc(p.name)}</b> vrea să intre în turneu <button class="btn small primary" data-act="approve" data-id="${p.id}">Acceptă</button><button class="btn small" data-act="deny" data-id="${p.id}">Refuză</button></div>`).join("");
   }
 
   // ---------- meniul lateral: chat, jurnal, sunet, gazdă ----------

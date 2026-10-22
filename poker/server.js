@@ -213,6 +213,12 @@ async function api(req, res, url) {
       }
       case "avatar": room.setAvatar(p, body.data); break;
       case "sit": room.setSit(p, body.mode); break;
+      case "approve": {
+        needHost();
+        const target = room.players.find(x => x.id === body.playerId);
+        if (target) room.approve(target, !!body.ok);
+        break;
+      }
       case "addplayer": {
         needHost();
         const name = String(body.name || "").trim().slice(0, 18);
