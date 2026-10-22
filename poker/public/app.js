@@ -538,10 +538,26 @@
       <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
   }
+  // Pe telefon: locuri fixe în jurul mesei, alese după numărul de jucători, care lasă liberă
+  // banda din mijloc cu cărțile comune. Pe ecran lat: elipsă.
+  const P = { me: [50, 90], BL: [20, 81], L: [11, 64], UL: [11, 30], TL: [27, 13], T: [50, 10], TR: [73, 13], UR: [89, 30], R: [89, 64], BR: [80, 81] };
+  const LAYOUT = {
+    1: ["me"], 2: ["me", "T"], 3: ["me", "UL", "UR"], 4: ["me", "UL", "T", "UR"], 5: ["me", "L", "TL", "TR", "R"],
+    6: ["me", "BL", "UL", "T", "UR", "BR"], 7: ["me", "BL", "UL", "TL", "TR", "UR", "BR"], 8: ["me", "BL", "L", "UL", "T", "UR", "R", "BR"],
+    9: ["me", "BL", "L", "UL", "TL", "TR", "UR", "R", "BR"], 10: ["me", "BL", "L", "UL", "TL", "T", "TR", "UR", "R", "BR"],
+  };
   function seatPositions(n) {
-    const pos = [];
     const ta = document.getElementById("tablearea");
-    const w = ta ? ta.clientWidth : 400;
+    const w = ta ? ta.clientWidth : 400, hgt = ta ? ta.clientHeight : 700;
+    const pos = [];
+    if (w < 700 || w < hgt) {
+      const minX = Math.max(8, (48 / w) * 100);
+      (LAYOUT[Math.min(10, Math.max(1, n))] || LAYOUT[10]).forEach(k => {
+        const [x0, y] = P[k], x = Math.min(100 - minX, Math.max(minX, x0));
+        pos.push({ x, y, bx: 50 + (x - 50) * 0.5, by: 48 + (y - 48) * 0.5 });
+      });
+      return pos;
+    }
     const rx = Math.min(43, 50 - (58 / w) * 100);
     for (let i = 0; i < n; i++) {
       const ang = (90 + i * 360 / n) * Math.PI / 180;
@@ -581,6 +597,7 @@
       if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${fmt(p.bet)}</div>`;
     });
     patch("seats", seats);
+    const seatsEl = document.getElementById("seats"); if (seatsEl) seatsEl.classList.toggle("crowd", rot.length >= 6);
     // centrul mesei
     let c = `<div class="board">${h ? h.board.map((x, j) => card(x, "", winCards, `${h.id}-b${j}`)).join("") : ""}</div>`;
     if (h && h.pot) c += `<div class="pot num">Pot ${fmt(h.pot)}</div>`;

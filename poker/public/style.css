@@ -308,3 +308,54 @@ a.btn { color: var(--fg); }
   .topbar .lvl { gap: 2px 10px; }
 }
 .seat .act { top: auto; bottom: -11px; z-index: 3; }
+/* cărțile de pe masă rămân mereu vizibile */
+.center { z-index: 3; top: 48%; }
+@media (max-width: 699px) {
+  .seat { width: 100px; }
+  .seat.me { width: 116px; }
+  .seat .nm { font-size: 12px; }
+  .seat .ch { font-size: 15px; }
+  .av { width: 38px; height: 38px; font-size: 14px; }
+  .seat .cards .card.sm { width: 28px; height: 39px; }
+  .seat .cards .card.sm .ix .r { font-size: 14px; }
+  .seat .cards .card.sm .pip { font-size: 16px; }
+  .seat .cards { top: -14px; }
+}
+.center { top: 50%; }
+/* telefon: locuri compacte */
+@media (max-width: 699px) {
+  .seat { width: 88px; }
+  .seat.me { width: 108px; }
+  .seat .box { padding: 6px 4px 3px; border-radius: 10px; }
+  .seat .nm { font-size: 11px; }
+  .seat .ch { font-size: 14px; }
+  .av { width: 32px; height: 32px; font-size: 12px; border-width: 2px; }
+  .seat.me .av { width: 38px; height: 38px; }
+  .seat .seatav { margin-bottom: -8px; }
+  .seat .cards { top: -10px; }
+  .seat .cards .card.sm { width: 24px; height: 34px; border-radius: 4px; }
+  .seat .cards .card.sm .ix { left: 1px; top: 0; }
+  .seat .cards .card.sm .ix .r { font-size: 12px; } .seat .cards .card.sm .ix .s { font-size: 9px; }
+  .seat .cards .card.sm .pip { font-size: 13px; right: 1px; }
+  .seat .act { font-size: 10px; padding: 0 5px; }
+  .seat .dealer { width: 18px; height: 18px; font-size: 10px; right: -6px; top: -6px; }
+  .betchip { font-size: 12px; padding: 0 6px; }
+}
+/* telefon cu mulți jucători: cărțile adversarilor stau în colțul plăcuței, nu deasupra */
+@media (max-width: 699px) {
+  #seats.crowd .seat:not(.me) .cards { top: auto; bottom: 4px; left: auto; right: -14px; transform: none; z-index: 2; gap: 1px; }
+  #seats.crowd .seat:not(.me) .cards .card.sm { width: 20px; height: 28px; }
+  #seats.crowd .seat:not(.me) .cards .card.sm .ix .r { font-size: 11px; } #seats.crowd .seat:not(.me) .cards .card.sm .ix .s { font-size: 8px; }
+  #seats.crowd .seat:not(.me) .cards .card.sm .pip { display: none; }
+  #seats.crowd .seat.win .cards .card.sm, #seats.crowd .seat .cards .card.sm.win { width: 24px; height: 34px; }
+}
+@media (max-width: 699px) {
+  #seats.crowd .seat:not(.me) .cards { top: -4px; bottom: auto; right: -2px; left: auto; }
+  #seats.crowd .seat:not(.me) .cards .card.sm { width: 19px; height: 27px; }
+  #seats.crowd .seat:not(.me) .cards .card.sm + .card.sm { margin-left: -5px; }
+  #seats.crowd .seat:not(.me) .seatav { margin-right: 26px; }
+}
+@media (max-width: 699px) {
+  #seats.crowd .seat:not(.me) .cards ~ .seatav { margin-top: 0; }
+  #seats.crowd .seat:not(.me) .cards { top: 3px; right: 6px; }
+}
