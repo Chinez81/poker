@@ -41,7 +41,8 @@
   const firstSeen = new Map();
   const m = location.pathname.match(/^\/masa\/([A-Za-z0-9]{4,8})(?:\/(s\.[A-Za-z0-9_-]+\.[a-f0-9]{20}))?/);
   const urlCode = m ? m[1].toUpperCase() : null;
-  if (m && m[2]) { store.set("poker:" + urlCode, m[2]); store.set("poker:lastLink", location.pathname); } // link personal
+  const isPracticeCode = c => /^M[A-Z0-9]{5}$/.test(c || "");
+  if (m && m[2]) { store.set("poker:" + urlCode, m[2]); store.set(isPracticeCode(urlCode) ? "poker:practiceLink" : "poker:lastLink", location.pathname); } // link personal
   // aplicația de pe ecranul principal se deschide direct la masa ta
   if (!m && location.pathname === "/" && store.get("poker:lastLink")) { location.replace(store.get("poker:lastLink")); }
   let restored = false;
@@ -78,7 +79,23 @@
     const g = ac.createGain(); g.gain.value = vol || 0.3;
     src.connect(f); f.connect(g); g.connect(master); src.start(t0);
   }
+  // clinchet de fise: impulsuri scurte de zgomot filtrat + un „ting” ceramic, la intervale neregulate
+  function chipClick(delay, vol) {
+    const ac = audioCtx; if (!ac || muted || volume === 0) return;
+    const t0 = ac.currentTime + delay, dur = 0.035;
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 3000 + Math.random() * 2500; bp.Q.value = 3;
+    const g = ac.createGain(); g.gain.value = vol;
+    src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
+    tone(2600 + Math.random() * 1600, 0.04, "triangle", vol * 0.35, delay);
+  }
+  function chipRun(n, span, vol) { let t = 0; for (let i = 0; i < n; i++) { chipClick(t, vol * (0.7 + Math.random() * 0.5)); t += span / n * (0.5 + Math.random()); } }
   const SND = {
+    bet(big) { chipRun(big ? 9 : 5, big ? 0.32 : 0.18, 0.55); },
+    gather() { chipRun(10, 0.4, 0.4); },
+    collect() { chipRun(16, 0.8, 0.5); },
     deal() { noise(0.06, 0.25, 0, 3000); noise(0.06, 0.2, 0.09, 3000); },
     card() { noise(0.07, 0.25, 0, 2500); },
     chips() { tone(2200, 0.05, "triangle", 0.15); tone(2600, 0.05, "triangle", 0.12, 0.05); tone(2400, 0.06, "triangle", 0.1, 0.1); },
@@ -96,20 +113,22 @@
     const h = cur.hand, ph = prev && prev.hand;
     if (h && (!ph || ph.id !== h.id)) { SND.deal(); return; }
     if (!h || !ph) return;
-    if (h.board.length > ph.board.length) SND.card();
+    if (h.board.length > ph.board.length) { SND.card(); if (ph.currentBet > 0 || prev.players.some(p => p.bet > 0)) SND.gather(); }
     const lastOf = s => Object.fromEntries(s.players.map(p => [p.id, p.last]));
     const a = lastOf(prev), b = lastOf(cur);
     let played = false;
     for (const id in b) {
       if (b[id] && b[id] !== a[id] && !played) {
         const l = b[id];
-        if (l === "Pas") SND.fold(); else if (l === "Check") SND.check(); else if (l !== "SB" && l !== "BB") SND.chips();
+        if (l === "Pas") SND.fold(); else if (l === "Check") SND.check();
+        else if (l !== "SB" && l !== "BB") { const pl = cur.players.find(x => x.id === id); SND.bet(/All-in/.test(l) || (pl && pl.bet >= 5 * (cur.blinds ? cur.blinds.bb : 1))); }
         played = true;
       }
     }
     if (h.done && !ph.done) {
       const me = cur.players.find(p => p.me);
-      if (me && me.winner) SND.win(); else SND.pot();
+      SND.collect();
+      if (me && me.winner) setTimeout(() => SND.win(), 450);
     }
     const pe = Object.fromEntries(prev.players.map(p => [p.id, p.emoji && p.emoji.e]));
     if (cur.players.some(p => p.emoji && p.emoji.e && p.emoji.leftMs > 3000 && !pe[p.id])) SND.emoji();
@@ -262,7 +281,7 @@
 
   // gazda își ține minte lista de jucători și setările (masa se poate reface după o repornire)
   function hostMemory() {
-    if (!S || !S.isHost) return;
+    if (!S || !S.isHost || S.practice) return;
     const key = "poker:room:" + S.code;
     let saved = null; try { saved = JSON.parse(store.get(key) || "null"); } catch (_) {}
     // masa a fost refăcută (server repornit): punem la loc lista și setările gazdei
@@ -275,16 +294,153 @@
     store.set(key, JSON.stringify({ roster: S.players.filter(p => !p.bot).map(p => p.name), settings: S.settings, roomId: S.roomId, v: S.settingsVersion }));
   }
 
+  // ---------- punctajul oficial ----------
+  async function openOfficial() {
+    try {
+      const p = await (await fetch("/api/official?token=" + encodeURIComponent(token || ""), { cache: "no-store" })).json();
+      window.Official.open(p, { canWrite: !!p.canEdit, toast, save: data => post("official", { data }) });
+    } catch (_) { toast("Punctajul oficial nu s-a putut încărca. Verifică internetul."); }
+  }
+  // ---------- „Masa mea”: masa de antrenament cu boți ----------
+  async function goMyTable() {
+    const r = await post("practice");
+    store.set("poker:practiceLink", r.url); store.set("poker:" + r.code, r.token);
+    location.href = r.url;
+  }
+  function goMainTable() { location.href = store.get("poker:lastLink") || "/"; }
+  async function practiceAction(a, b) {
+    if (a === "myTable") { await goMyTable(); return true; }
+    if (a === "backMain") { goMainTable(); return true; }
+    if (a === "practiceStart") {
+      if (S.started && !S.finished && !confirmed("practiceStart", b, "Jocul curent se oprește. Apasă din nou")) return true;
+      await post("practiceStart"); if (drawer) closeDrawer(); return true;
+    }
+    if (a === "practiceClose") { if (confirmed("practiceClose", b, "Sigur? Apasă din nou")) { await post("abort"); if (drawer) closeDrawer(); } return true; }
+    return false;
+  }
+  const PRACTICE_INFO = "Joc simplu, fără punctaj. Fiecare începe cu 50.000 de fise, blind-uri și timp ca la masa mare. Dacă rămâi fără fise, reintri cu 50.000 de câte ori vrei.";
+  window.addEventListener("beforeunload", e => { if (window.Official && window.Official.hasUnsaved()) { e.preventDefault(); e.returnValue = ""; } });
+
+  // ---------- voce live (WebRTC): fiecare microfon pornit trimite sunetul direct celorlalți ----------
+  let voiceOn = false, micStream = null, iceCfg = null;
+  const vOut = {}, vIn = {}; // id jucător -> legătură (eu vorbesc / eu ascult)
+  let voiceVol = Number(store.get("poker:vvol") ?? 1); if (!(voiceVol >= 0 && voiceVol <= 1)) voiceVol = 1;
+  let voiceMuted = store.get("poker:vmute") === "1", needTapAudio = false;
+  const audioBox = document.createElement("div"); audioBox.style.display = "none"; document.body.appendChild(audioBox);
+  async function iceServers() { if (!iceCfg) { try { iceCfg = (await (await fetch("/api/ice")).json()).iceServers; } catch (_) { iceCfg = [{ urls: "stun:stun.l.google.com:19302" }]; } } return iceCfg; }
+  function sig(to, data) { post("rtc", { to, data }).catch(() => {}); }
+  function queueIce(conn, c) { if (conn.pc.remoteDescription) conn.pc.addIceCandidate(c).catch(() => {}); else conn.q.push(c); }
+  function flushIce(conn) { conn.q.splice(0).forEach(c => conn.pc.addIceCandidate(c).catch(() => {})); }
+  async function micToggle() {
+    if (voiceOn) return micOff();
+    if (!navigator.mediaDevices || !window.RTCPeerConnection) return toast("Telefonul acesta nu permite vorbirea din browser.");
+    try { micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+    catch (_) { return toast("Nu am primit voie la microfon. Permite microfonul pentru acest site din setările browserului."); }
+    voiceOn = true; audio();
+    post("talk", { on: true }).catch(() => {});
+    connectListeners();
+    refreshMic();
+  }
+  function micOff() {
+    voiceOn = false;
+    if (micStream) micStream.getTracks().forEach(t => t.stop()); micStream = null;
+    Object.keys(vOut).forEach(id => { sig(id, { t: "bye" }); try { vOut[id].pc.close(); } catch (_) {} delete vOut[id]; });
+    post("talk", { on: false }).catch(() => {});
+    refreshMic();
+  }
+  function refreshMic() { document.querySelectorAll("[data-act=mic]").forEach(b => { b.classList.toggle("on", voiceOn); b.innerHTML = micLabel(); }); }
+  function micLabel() { return voiceOn ? "🎤<span>Vorbești</span>" : "🎤"; }
+  function micBtn() { return `<button class="micbtn ${voiceOn ? "on" : ""}" data-act="mic" aria-label="Microfon">${micLabel()}</button>`; }
+  async function connectListeners() {
+    if (!voiceOn || !S || !micStream) return;
+    const live = S.players.filter(p => !p.me && p.connected && !p.bot);
+    Object.keys(vOut).forEach(id => { if (!live.some(p => p.id === id)) { try { vOut[id].pc.close(); } catch (_) {} delete vOut[id]; } });
+    const ice = await iceServers();
+    for (const p of live) {
+      if (vOut[p.id] || !voiceOn || !micStream) continue;
+      const pc = new RTCPeerConnection({ iceServers: ice });
+      const conn = vOut[p.id] = { pc, q: [] };
+      micStream.getTracks().forEach(t => pc.addTrack(t, micStream));
+      pc.onicecandidate = e => { if (e.candidate) sig(p.id, { t: "ice", dir: "out", c: e.candidate }); };
+      pc.onconnectionstatechange = () => { if (["failed", "closed"].includes(pc.connectionState) && vOut[p.id] === conn) delete vOut[p.id]; };
+      const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+      sig(p.id, { t: "offer", sdp: pc.localDescription });
+    }
+  }
+  function closeIn(id) { const c = vIn[id]; if (!c) return; try { c.pc.close(); } catch (_) {} if (c.audio) { c.audio.srcObject = null; c.audio.remove(); } delete vIn[id]; }
+  const rtcChain = {};
+  function onRtc(from, d) { rtcChain[from] = (rtcChain[from] || Promise.resolve()).then(() => handleRtc(from, d)); }
+  async function handleRtc(from, d) {
+    try {
+      if (d.t === "offer") {
+        closeIn(from);
+        const pc = new RTCPeerConnection({ iceServers: await iceServers() });
+        const el = document.createElement("audio"); el.autoplay = true; el.playsInline = true; audioBox.appendChild(el);
+        const conn = vIn[from] = { pc, q: [], audio: el };
+        pc.ontrack = e => { el.srcObject = e.streams[0]; el.volume = voiceVol; el.muted = voiceMuted; el.play().catch(() => { needTapAudio = true; toast("Atinge ecranul ca să auzi vocile."); }); };
+        pc.onicecandidate = e => { if (e.candidate) sig(from, { t: "ice", dir: "in", c: e.candidate }); };
+        await pc.setRemoteDescription(d.sdp); flushIce(conn);
+        const ans = await pc.createAnswer(); await pc.setLocalDescription(ans);
+        sig(from, { t: "answer", sdp: pc.localDescription });
+      } else if (d.t === "answer") { const c = vOut[from]; if (c) { await c.pc.setRemoteDescription(d.sdp); flushIce(c); } }
+      else if (d.t === "ice") { const c = d.dir === "out" ? vIn[from] : vOut[from]; if (c) queueIce(c, d.c); }
+      else if (d.t === "bye") closeIn(from);
+    } catch (_) {}
+  }
+  document.addEventListener("pointerdown", () => { if (needTapAudio) { needTapAudio = false; Object.values(vIn).forEach(c => c.audio && c.audio.play().catch(() => {})); } });
+  function applyVoiceVolume() { Object.values(vIn).forEach(c => { if (c.audio) { c.audio.volume = voiceVol; c.audio.muted = voiceMuted; } }); }
+
+  // ---------- fise ----------
+  const CHIP_DEN = [[100000, "c-purple"], [25000, "c-black"], [5000, "c-green"], [1000, "c-blue"], [500, "c-red"], [100, "c-white"]];
+  function chipStack(amount, max) {
+    let left = amount, discs = [];
+    for (const [v, c] of CHIP_DEN) { while (left >= v && discs.length < (max || 9)) { discs.push(c); left -= v; } }
+    if (!discs.length) discs.push("c-white");
+    return `<span class="chips">${discs.reverse().map((c, i) => `<i class="chip ${c}" style="--i:${i}"></i>`).join("")}</span>`;
+  }
+  function potStacks(amount) {
+    // potul: 3 teancuri una lângă alta
+    const parts = [Math.ceil(amount * 0.45), Math.floor(amount * 0.35), amount - Math.ceil(amount * 0.45) - Math.floor(amount * 0.35)].filter(x => x > 0);
+    return `<span class="potstacks">${parts.map(x => chipStack(x, 8)).join("")}</span>`;
+  }
+  let seatPos = {}; // id -> {x,y,bx,by} (procente din masă), pentru animații
+  function flyChips(from, to, n, delay) {
+    const ta = document.getElementById("tablearea"); if (!ta) return;
+    for (let i = 0; i < n; i++) {
+      const el = document.createElement("i");
+      el.className = "chip fly " + CHIP_DEN[(i + 2) % 5][1];
+      el.style.left = from.x + "%"; el.style.top = from.y + "%";
+      ta.appendChild(el);
+      const d = (delay || 0) + i * 40;
+      setTimeout(() => { el.style.left = to.x + "%"; el.style.top = to.y + "%"; el.style.opacity = "0.2"; }, 30 + d);
+      setTimeout(() => el.remove(), 700 + d);
+    }
+  }
+  const POT_POS = { x: 50, y: 58 };
+  function animateChips(prev, cur) {
+    if (!prev || !cur || !cur.hand || !prev.hand || cur.hand.id !== prev.hand.id) return;
+    const ph = prev.hand, h = cur.hand;
+    // runda de pariuri s-a încheiat: fisele din fața jucătorilor merg în pot
+    const streetEnded = (h.board.length > ph.board.length) || (h.done && !ph.done);
+    if (streetEnded) prev.players.forEach(p => { if (p.bet > 0 && seatPos[p.id]) flyChips({ x: seatPos[p.id].bx, y: seatPos[p.id].by }, POT_POS, 3); });
+    // mâna s-a terminat: potul merge la câștigător
+    if (h.done && !ph.done) cur.players.forEach(p => { if (p.winner && seatPos[p.id]) flyChips(POT_POS, { x: seatPos[p.id].x, y: seatPos[p.id].y }, 8, 450); });
+  }
+
   // ---------- conexiune ----------
   function connect() {
     if (es) es.close();
     es = new EventSource(`/api/stream?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`);
+    es.addEventListener("official", ev => { try { window.Official && window.Official.update(JSON.parse(ev.data)); } catch (_) {} });
+    es.addEventListener("rtc", ev => { try { const m = JSON.parse(ev.data); onRtc(m.from, m.data); } catch (_) {} });
     es.onmessage = ev => {
       try {
         const next = JSON.parse(ev.data); next._at = Date.now();
         prevS = S; S = next; maybeSendAvatar(); hostMemory(); checkVersion();
         if (!pushSent) { pushSent = true; subscribePush(false).then(ok => { if (!ok) pushSent = false; }); sendVisibility(); }
         try { playDiff(prevS, S); } catch (_) {}
+        try { if (screen === "table") animateChips(prevS, S); } catch (_) {}
+        if (voiceOn) connectListeners();
         render();
       } catch (_) {}
     };
@@ -298,6 +454,7 @@
     };
   }
   function lost(msg) {
+    if (voiceOn) micOff();
     if (es) es.close();
     if (code) store.del("poker:" + code);
     if (drawer) closeDrawer(true);
@@ -322,6 +479,8 @@
     $app.innerHTML = `<div class="wrap">
       <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>Poker între prieteni</h1><p>Texas Hold'em pe fise, la masa voastră privată.</p></div>
       ${error ? `<p class="err">${esc(error)}</p>` : ""}
+      <button class="btn primary wide" id="homeOfficial" style="margin-bottom:10px">📋 Punctaj oficial (turneul live)</button>
+      ${store.get("poker:lastLink") || store.get("poker:practiceLink") ? `<div class="share" style="margin-bottom:12px">${store.get("poker:lastLink") ? `<a class="btn" style="flex:1" href="${esc(store.get("poker:lastLink"))}">♠ Masa noastră</a>` : ""}${store.get("poker:practiceLink") ? `<a class="btn" style="flex:1" href="${esc(store.get("poker:practiceLink"))}">🎯 Masa mea</a>` : ""}</div>` : ""}
       <div class="grid2">
         <form class="panel" id="joinForm"><h2>Intră la o masă</h2>
           <label class="f">Codul mesei<input class="t code" id="jCode" maxlength="8" autocomplete="off" value="${esc(urlCode || "")}" placeholder="ex. K7M2Q" required></label>
@@ -333,6 +492,7 @@
           <button class="btn wide">Creează masa</button></form>
       </div><div class="share" style="justify-content:center"><button class="btn small" id="homeReload">🔄 Actualizează</button></div></div>`;
     document.getElementById("homeReload").onclick = hardReload;
+    document.getElementById("homeOfficial").onclick = openOfficial;
     document.getElementById("joinForm").onsubmit = async e => {
       e.preventDefault(); audio();
       const c = document.getElementById("jCode").value.trim().toUpperCase(), n = document.getElementById("jName").value.trim();
@@ -369,9 +529,24 @@
   // ---------- lobby ----------
   function buildLobby() {
     raiseOpen = false; emojiOpen = false;
+    if (S.practice) {
+      $app.innerHTML = `<div class="wrap">
+        <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>🎯 Masa mea</h1><p>Masa ta de antrenament: joci singur cu boții, oricând.</p></div>
+        <section class="panel"><h2>La masă <span class="aside" id="pcount"></span></h2><div class="plist" id="plist"></div><div id="botArea"></div></section>
+        <div id="results"></div>
+        <div id="startArea"></div>
+        <section class="panel"><h2>Reguli fixe</h2><p class="hint">${PRACTICE_INFO}</p></section>
+        <div class="share"><button class="btn" data-act="official" style="flex:1">📋 Punctaj oficial</button><button class="btn" data-act="backMain" style="flex:1">⬅ Înapoi la masa noastră</button></div>
+        <div class="share"><button class="btn small" data-act="drawer" style="flex:1">🔊 Sunet și setări</button></div>
+      </div>`;
+      $app.onclick = lobbyClick; $app.oninput = null; $app.onchange = null; $app.onsubmit = null;
+      return;
+    }
     draft = JSON.parse(JSON.stringify(S.settings)); draftDirty = false;
     $app.innerHTML = `<div class="wrap">
       <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>Poker între prieteni</h1></div>
+      <button class="btn primary wide" data-act="official">📋 Punctaj oficial (turneul live)</button>
+      <button class="btn wide" data-act="myTable" style="margin-top:8px">🎯 Masa mea (antrenament cu boți)</button>
       <section class="panel"><h2>Masa <span class="bigcode">${esc(S.code)}</span></h2>
         <div class="share"><div class="link" id="shareLink">${esc(location.origin + "/masa/" + S.code)}</div><button class="btn" data-act="copy">Copiază linkul</button></div>
         <p class="hint">Trimite linkul prietenilor. Ei își scriu doar numele și intră, fără cont.</p></section>
@@ -386,7 +561,7 @@
       <section class="panel"><h2>Locurile la masă</h2><p class="hint">Atinge un loc liber ca să te muți acolo.</p><div class="seatmap" id="seatmap"></div><div id="shuffleArea"></div></section>
       <section class="panel"><h2>Setările mesei</h2><div id="settings"></div></section>
       <div id="startArea"></div>
-      <div class="share"><button class="btn" data-act="score" style="flex:1">🏆 Punctaj</button><button class="btn" data-act="drawer" style="flex:1">💬 Chat și sunet</button></div>
+      <div class="share"><button class="btn" data-act="score" style="flex:1">🏆 Punctaj online</button><button class="btn" data-act="drawer" style="flex:1">💬 Chat și sunet</button></div>
     </div>`;
     $app.onclick = lobbyClick; $app.oninput = settingsInput; $app.onchange = settingsInput;
     $app.onsubmit = async e => {
@@ -482,11 +657,20 @@
       if (!p.seen) tags += `<span class="tag muted">n-a intrat încă</span>`;
       if (p.sitOut) tags += `<span class="tag muted">stă deoparte</span>`;
       let ctrl = "";
-      if (S.isHost && !p.me) ctrl += `<button class="btn small" data-act="makehost" data-id="${p.id}">Fă gazdă</button><button class="btn small" data-act="kick" data-id="${p.id}" data-label="Scoate">Scoate</button>`;
+      if (S.isHost && !p.me && !S.practice) ctrl += `<button class="btn small" data-act="makehost" data-id="${p.id}">Fă gazdă</button><button class="btn small" data-act="kick" data-id="${p.id}" data-label="Scoate">Scoate</button>`;
       return `<div class="pl"><span class="dot ${p.connected ? "on" : ""}" title="${p.connected ? "conectat" : "deconectat"}"></span><span class="nm">${esc(p.name)}</span>${tags}${ctrl}</div>`;
     }).join("");
   }
   function updateLobby() {
+    if (S.practice) {
+      const bots = S.players.filter(p => p.bot).length;
+      patch("pcount", `${bots} / 7 boți`);
+      patch("plist", S.players.map(p => `<div class="pl"><span class="dot ${p.bot || p.connected ? "on" : ""}"></span>${avatar(p)}<span class="nm">${esc(p.name)}${p.me ? " (tu)" : ""}</span>${p.bot ? `<button class="btn small" data-act="kick" data-id="${p.id}" data-label="Scoate">Scoate</button>` : ""}</div>`).join(""));
+      patch("botArea", `<div class="share"><button class="btn" data-act="addbot" ${bots >= 7 ? "disabled" : ""}>+ Adaugă un bot</button>${bots ? `<button class="btn" data-act="removebots">Scoate toți boții</button>` : ""}</div>${bots ? "" : `<p class="hint">Adaugă între 1 și 7 boți.</p>`}`);
+      patch("results", resultsHtml());
+      patch("startArea", `<button class="btn primary wide" data-act="practiceStart">▶ ${S.event ? "Joc nou" : "Începe jocul"}</button>`);
+      return;
+    }
     patch("eventArea", eventHtml());
     patch("inviteArea", inviteHtml());
     patch("notifArea", notifHtml());
@@ -589,8 +773,10 @@
     try {
       if (await settingsAction(a, b)) return;
       if (await eventAction(a, b)) return;
+      if (await practiceAction(a, b)) return;
       if (a === "copy") copy(location.origin + "/masa/" + S.code);
       else if (a === "score") openDrawer("score");
+      else if (a === "official") openOfficial();
       else if (a === "avatar") pickAvatar();
       else if (a === "avatarDel") removeAvatar();
       else if (a === "enablePush") { await subscribePush(true); updateLobby(); }
@@ -646,9 +832,9 @@
     $app.onclick = tableClick; $app.oninput = tableInput; $app.onchange = null;
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
-        <button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
+        <button class="iconbtn" data-act="official" aria-label="Punctaj oficial">📋</button><button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
       <div id="reqArea" class="reqarea"></div>
-      <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div></div>
+      <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div><div id="winArea"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
   }
   // Pe telefon: locuri fixe în jurul mesei, alese după numărul de jucători, care lasă liberă
@@ -699,7 +885,7 @@
     let seats = "";
     rot.forEach((p, i) => {
       const q = pos[i];
-      const cls = ["seat", (p.sitOut || p.spectator) && !p.inHand ? "away" : "", p.me ? "me" : "", p.toAct ? "turn" : "", p.folded ? "folded" : "", p.out ? "out" : "", p.winner ? "win" : "", !p.connected ? "off" : "", p.waiting ? "waiting" : "", p.usingBank ? "bank" : ""].join(" ");
+      const cls = ["seat", p.talking ? "talking" : "", (p.sitOut || p.spectator) && !p.inHand ? "away" : "", p.me ? "me" : "", p.toAct ? "turn" : "", p.folded ? "folded" : "", p.out ? "out" : "", p.winner ? "win" : "", !p.connected ? "off" : "", p.waiting ? "waiting" : "", p.usingBank ? "bank" : ""].join(" ");
       let cards = "";
       if (!p.me && p.cards && h) cards = `<div class="cards">${p.cards.map((c, j) => card(c, "sm", winCards, `${h.id}-${p.id}-${j}-${c === "??" ? "b" : "f"}`)).join("")}</div>`;
       const timer = p.toAct && h ? `<div class="timer"><i class="${h.turnLeftMs < 6000 ? "low" : ""}" style="width:${Math.round(100 * h.turnLeftMs / h.turnTotalMs)}%"></i></div>` : "";
@@ -708,16 +894,25 @@
       const bub = p.bubble ? `<span class="bubble" data-until="${Date.now() + p.bubble.leftMs}">${esc(p.bubble.m)}</span>` : "";
       seats += `<div class="${cls}" data-act="profile" data-id="${p.id}" style="left:${q.x}%;top:${q.y}%">${bub}${emo}${cards}${avatar(p, "seatav")}<div class="box">${label ? `<span class="act">${esc(label)}</span>` : ""}${p.dealer ? '<span class="dealer">D</span>' : ""}
         <div class="nm">${esc(p.name)}</div><div class="ch num">${p.out ? "eliminat" : "● " + fmt(p.chips)}</div>${timer}</div></div>`;
-      if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${fmt(p.bet)}</div>`;
+      seatPos[p.id] = q;
+      if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${chipStack(p.bet, 7)}<span class="amt">${fmt(p.bet)}</span></div>`;
     });
     patch("seats", seats);
     const seatsEl = document.getElementById("seats"); if (seatsEl) seatsEl.classList.toggle("crowd", rot.length >= 6);
     // centrul mesei
     let c = `<div class="board">${h ? h.board.map((x, j) => card(x, "", winCards, `${h.id}-b${j}`)).join("") : ""}</div>`;
-    if (h && h.pot) c += `<div class="pot num">Pot ${fmt(h.pot)}</div>`;
+    const inFront = h && !h.done ? S.players.reduce((t, p) => t + (p.bet || 0), 0) : 0;
+    const middle = h ? (h.done ? 0 : h.pot - inFront) : 0;
+    if (h && h.pot) c += `<div class="pot num">${middle > 0 ? potStacks(middle) : ""}<span>Pot ${fmt(h.pot)}</span></div>`;
     if (S.paused) c += `<div class="paused">${S.onBreak ? `PAUZĂ · reluăm în <span id="breakClock">${mmss(S.breakLeftMs)}</span>` : "PAUZĂ"}</div>`;
-    if (lr) c += `<div class="result">${lr.msgs.map(esc).join("<br>")}</div>`;
     patch("center", c);
+    // câștigătorul, scris mare peste masă
+    let wb = "";
+    if (lr) {
+      const wins = lr.msgs.map(m => { const mm = /^(.*) câștigă ([\d.]+)( cu (.*))?$/.exec(m); return mm ? { n: mm[1], a: mm[2], hnd: mm[4] } : { n: m, a: "", hnd: "" }; });
+      wb = `<div class="winbanner" data-hand="${lr.handId}"><div class="wb-t">🏆 ${wins.length > 1 ? "Câștigători" : "Câștigător"}</div>${wins.map(w => `<div class="wb-n">${esc(w.n)}</div><div class="wb-s">câștigă <b>${esc(w.a)}</b>${w.hnd ? ` cu <b>${esc(w.hnd)}</b>` : ""}</div>`).join("")}</div>`;
+    }
+    patch("winArea", wb);
     // bara mea
     const a = S.actions;
     if (h && h.id !== lastHandId) { lastHandId = h.id; raiseOpen = false; }
@@ -749,11 +944,11 @@
         const presets = [["Min", a.minTo, true]].concat([2, 3, 4].map(k => { const v = Math.min(a.maxTo, k * bb); return [`${k}×BB`, v, v >= a.minTo]; }));
         mb += `<div class="raisebox"><div class="row"><input type="range" id="rRange" min="${a.minTo}" max="${a.maxTo}" step="${Math.max(1, S.blinds.sb)}" value="${raiseVal}"><input class="amt num" id="rAmt" type="number" inputmode="numeric" value="${raiseVal}"></div>
           <div class="presets">${presets.map(([l, v, ok]) => `<button class="btn small" data-act="preset" data-v="${v}" ${ok ? "" : "disabled"}>${l}<br><span class="pv">${fmt(v)}</span></button>`).join("")}<button class="btn small allin" data-act="preset" data-v="${a.maxTo}">All-in<br><span class="pv">${fmt(a.maxTo)}</span></button></div>
-          <div class="acts" style="grid-template-columns:1fr 2fr"><button class="btn" data-act="raiseCancel">Înapoi</button><button class="btn raise" data-act="raiseGo" id="rGo">${a.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}</button></div></div>`;
+          <div class="acts" style="grid-template-columns:1fr 2fr auto"><button class="btn" data-act="raiseCancel">Înapoi</button><button class="btn raise" data-act="raiseGo" id="rGo">${a.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}</button>${micBtn()}</div></div>`;
       } else {
         const callLbl = a.canCheck ? "Check" : (a.toCall >= me.chips ? `All-in ${fmt(a.toCall)}` : `Call ${fmt(a.toCall)}`);
-        mb += `<div class="acts"><button class="btn fold" data-act="fold">Fold</button><button class="btn call" data-act="${a.canCheck ? "check" : "call"}">${callLbl}</button>
-          ${a.canRaise ? `<button class="btn raise" data-act="raiseOpen">${a.isBet ? "Bet" : "Raise"}</button>` : `<button class="btn" disabled>Raise</button>`}</div>`;
+        mb += `<div class="acts withmic"><button class="btn fold" data-act="fold">Fold</button><button class="btn call" data-act="${a.canCheck ? "check" : "call"}">${callLbl}</button>
+          ${a.canRaise ? `<button class="btn raise" data-act="raiseOpen">${a.isBet ? "Bet" : "Raise"}</button>` : `<button class="btn" disabled>Raise</button>`}${micBtn()}</div>`;
       }
     } else {
       let extra = "";
@@ -762,7 +957,7 @@
       if (me.spectator && S.event && S.event.type === "turneu") extra += me.pending ? "" : `<button class="btn primary" data-act="sitBack">Cere să intri în turneu</button>`;
       else if (me.sitOut || me.spectator) extra += `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>`;
       else if (!me.out) extra += `<button class="btn small" data-act="sitHand" ${me.sitOutOnce ? "disabled" : ""}>${me.sitOutOnce ? "Stai deoparte o mână" : "Stau o mână"}</button><button class="btn small" data-act="sitOut">Stau deoparte</button>`;
-      if (extra) mb += `<div class="share" style="justify-content:center">${extra}</div>`;
+      mb += `<div class="share sitrow">${extra}${micBtn()}</div>`;
       if (h && !h.done && me.inHand && !me.folded && !me.out) {
         const who = S.players.find(p => p.toAct);
         mb += `<div class="waitmsg">${who ? `Este rândul lui ${esc(who.name)}…` : "…"}</div>`;
@@ -803,8 +998,11 @@
       if (a === "drawer" && drawer) return closeDrawer();
       if (a === "drawer") return openDrawer(S.isHost ? drawerTab : (drawerTab === "host" ? "chat" : drawerTab));
       if (a === "score") return openDrawer("score");
+      if (a === "official") return openOfficial();
+      if (await practiceAction(a, b)) return;
       if (a === "sound") return openDrawer("me");
       if (a === "hostmenu") return openDrawer("host");
+      if (a === "mic") return micToggle();
       if (a === "profile") return showProfile(b.dataset.id);
       if (a === "approve" || a === "deny") return await post("approve", { playerId: b.dataset.id, ok: a === "approve" });
       if (a === "extra") { b.disabled = true; return await post("extra"); }
@@ -869,6 +1067,7 @@
       try { history.pushState({ drawer: 1 }, ""); } catch (_) {}
       drawer.onclick = drawerClick;
       drawer.oninput = e => {
+        if (e.target.id === "vvolRange") { voiceVol = Number(e.target.value) / 100; store.set("poker:vvol", String(voiceVol)); applyVoiceVolume(); const l = drawer.querySelector("#vvolLbl"); if (l) l.textContent = Math.round(voiceVol * 100) + "%"; return; }
         if (e.target.id === "volRange") { volume = Number(e.target.value) / 100; store.set("poker:vol", String(volume)); audio(); const l = drawer.querySelector("#volLbl"); if (l) l.textContent = Math.round(volume * 100) + "%"; return; }
         settingsInput(e);
       };
@@ -902,7 +1101,8 @@
     try {
       if (await settingsAction(a, b)) return;
       if (a === "mute") { muted = !muted; store.set("poker:mute", muted ? "1" : "0"); audio(); if (!muted) SND.chips(); const sb = document.querySelector('[data-act="sound"]'); if (sb) sb.textContent = muted ? "🔇" : "🔊"; return updateDrawer(true); }
-      if (a === "testSound") { audio(); return SND.win(); }
+      if (a === "testSound") { audio(); SND.bet(true); return setTimeout(() => SND.win(), 400); }
+      if (a === "vmute") { voiceMuted = !voiceMuted; store.set("poker:vmute", voiceMuted ? "1" : "0"); applyVoiceVolume(); return updateDrawer(true); }
       if (a === "avatar") return pickAvatar();
       if (a === "enablePush") { await subscribePush(true); return updateDrawer(true); }
       if (a === "install") return doInstall();
@@ -912,6 +1112,8 @@
       if (a === "sitHand") return await post("sit", { mode: "hand" });
       if (a === "sitOut") return await post("sit", { mode: "out" });
       if (await eventAction(a, b)) return;
+      if (await practiceAction(a, b)) return;
+      if (a === "official") return openOfficial();
       if (a === "leave") { if (confirmed("leave", b)) await leave(); return; }
       if (a === "pause") return await post("pause");
       if (a === "stop") { if (confirmed("stop", b)) { await post("stop"); toast("Jocul a fost încheiat."); } return; }
@@ -954,14 +1156,29 @@
     else if (drawerTab === "me") {
       html = `<div class="hostbox"><h3 class="sub">Sunet</h3>
         <label class="f">Volum <span id="volLbl">${Math.round(volume * 100)}%</span><input type="range" id="volRange" min="0" max="100" value="${Math.round(volume * 100)}"></label>
+        <label class="f">Volum voci (microfon) <span id="vvolLbl">${Math.round(voiceVol * 100)}%</span><input type="range" id="vvolRange" min="0" max="100" value="${Math.round(voiceVol * 100)}"></label>
+        <div class="share"><button class="btn" data-act="vmute">${voiceMuted ? "🔇 Vocile sunt oprite · Pornește" : "🗣 Vocile se aud · Oprește"}</button></div>
         <div class="share"><button class="btn" data-act="mute">${muted ? "🔇 Sunetul e oprit · Pornește" : "🔊 Sunetul e pornit · Oprește"}</button><button class="btn" data-act="testSound">Testează</button></div>
         <h3 class="sub">Notificări</h3>${notifHtml()}
         <h3 class="sub">Aplicația</h3>${appHtml()}
         <h3 class="sub">Poza ta</h3><div class="share">${avatar(S.players.find(p => p.me), "lg")}<button class="btn" data-act="avatar">Alege o poză</button></div>
         <h3 class="sub">Joc</h3><div class="share">${(() => { const me = S.players.find(p => p.me); return me.sitOut || me.spectator ? `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>` : `<button class="btn" data-act="sitHand">Stau o mână</button><button class="btn" data-act="sitOut">Stau deoparte</button>`; })()}</div>
+        <h3 class="sub">Punctaj oficial</h3><button class="btn" data-act="official">📋 Deschide punctajul oficial</button>
+        ${S.practice ? `<h3 class="sub">Masa mea</h3><p class="hint">${PRACTICE_INFO}</p><button class="btn" data-act="backMain">⬅ Înapoi la masa noastră</button></div>` : `<h3 class="sub">Masa mea</h3><p class="hint">Masa ta de antrenament: joci singur cu până la 7 boți, oricând.</p><button class="btn" data-act="myTable">🎯 Masa mea (antrenament cu boți)</button>
         <h3 class="sub">Masa</h3><p class="hint">Codul mesei: <b>${esc(S.code)}</b>. Cu linkul tău personal revii oricând la locul tău.</p>
         <button class="btn" data-act="leave" data-label="Ieși de la masă">Ieși de la masă</button>
-        <p class="hint">Dacă ieși în timpul unei mâini, cărțile tale se aruncă și pleci când se termină mâna.</p></div>`;
+        <p class="hint">Dacă ieși în timpul unei mâini, cărțile tale se aruncă și pleci când se termină mâna.</p></div>`}`;
+    } else if (drawerTab === "host" && S.practice) {
+      const bots = S.players.filter(p => p.bot).length;
+      html = `<div class="hostbox">
+        <div class="share"><button class="btn" data-act="pause">${S.paused ? "▶ Continuă jocul" : "⏸ Pune pauză"}</button></div>
+        <div class="share"><button class="btn primary" data-act="practiceStart" data-label="🔄 Începe din nou">🔄 Începe din nou</button><button class="btn red" data-act="practiceClose" data-label="⏹ Închide jocul">⏹ Închide jocul</button></div>
+        <p class="hint">„Începe din nou” împarte din nou câte 50.000 de fise tuturor. „Închide jocul” te duce la masa ta, unde adaugi sau scoți boți.</p>
+        <h3 class="sub">Boți (${bots} / 7)</h3>
+        <div class="share"><button class="btn small" data-act="addbot" ${bots >= 7 ? "disabled" : ""}>+ Adaugă un bot</button>${bots ? `<button class="btn small" data-act="removebots">Scoate boții</button>` : ""}</div>
+        <p class="hint">Un bot nou intră de la mâna următoare.</p>
+        <h3 class="sub">Reguli fixe</h3><p class="hint">${PRACTICE_INFO}</p>
+        <button class="btn" data-act="backMain">⬅ Înapoi la masa noastră</button></div>`;
     } else if (drawerTab === "host") {
       html = `<div class="hostbox">
         <div class="share"><button class="btn" data-act="pause">${S.paused ? "▶ Continuă jocul" : "⏸ Pune pauză"}</button></div>
@@ -1025,5 +1242,8 @@
     post("join", { code: urlCode, token: store.get("poker:" + urlCode) })
       .then(r => enter(r.code, r.token))
       .catch(() => { store.del("poker:" + urlCode); code = null; renderHome(); });
-  } else renderHome();
+  } else {
+    renderHome();
+    if (location.pathname === "/punctaj") openOfficial();
+  }
 })();

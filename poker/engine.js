@@ -652,11 +652,14 @@ class Room {
     }
     this.nextHandAt = now + this.settings.nextHandSec * 1000;
   }
-  rebuyOpen() { return this.started && !this.finished && !!this.event && this.event.type === "simplu" && this.settings.rebuyUntilLevel > 0 && this.level + 1 <= this.settings.rebuyUntilLevel; }
+  rebuyOpen() {
+    if (this.practice) return this.started && !this.finished; // la masa de antrenament: reintrare oricând
+    return this.started && !this.finished && !!this.event && this.event.type === "simplu" && this.settings.rebuyUntilLevel > 0 && this.level + 1 <= this.settings.rebuyUntilLevel;
+  }
   rebuy(p, now) {
     if (!p.out) throw new Error("Poți reintra doar după ce ai fost eliminat.");
     if (!this.rebuyOpen()) throw new Error("Perioada de reintrare s-a încheiat.");
-    if (p.rebuys >= this.settings.rebuyMax) throw new Error("Ai folosit deja toate reintrările.");
+    if (!this.practice && p.rebuys >= this.settings.rebuyMax) throw new Error("Ai folosit deja toate reintrările.");
     p.rebuys++; p.out = false; p.place = null; p.waiting = true; p.chips = this.settings.stack; p.bank = this.settings.timeBankSec * 1000;
     this.bustOrder = this.bustOrder.filter(t => t !== p.token);
     this.addLog(`${p.name} reintră în joc cu ${fmt(this.settings.stack)} fise.`);
@@ -781,7 +784,7 @@ class Room {
         emoji: p.emoji && now - p.emoji.t < 4000 ? { e: p.emoji.e, leftMs: 4000 - (now - p.emoji.t) } : null,
         bubble: p.lastChat && now - p.lastChat.t < 6000 ? { m: p.lastChat.m, leftMs: 6000 - (now - p.lastChat.t) } : null,
         avatarV: p.avatar ? p.avatarV : 0,
-        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot, pending: !!p.pending,
+        sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot, pending: !!p.pending, talking: !!(p.talking && p.conns > 0),
         link: (isHost || p.token === token) && p.token.startsWith("s.") ? p.token : null,
       };
     });
@@ -808,7 +811,8 @@ class Room {
       aliveCount: this.alive().length, waitingPlayers: !!this.waitingPlayers, settingsVersion: SETTINGS_VERSION,
       handLog: (this.handLog || []).slice(-25), roomId: this.createdAt,
       rebuyOpen: this.rebuyOpen(),
-      canRebuy: !!(me && me.out && this.rebuyOpen() && me.rebuys < this.settings.rebuyMax),
+      canRebuy: !!(me && me.out && this.rebuyOpen() && (this.practice || me.rebuys < this.settings.rebuyMax)),
+      practice: !!this.practice,
       myBankMs: me ? me.bank : 0,
       canShow: !!(h && h.done && me && h.holes[token] && !h.reveal[token]),
       players,

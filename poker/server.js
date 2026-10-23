@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { Room, DEFAULT_SETTINGS } = require("./engine");
 const Push = require("./push");
+const { OfficialStore } = require("./official-store");
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC = path.join(__dirname, "public");
@@ -60,6 +61,14 @@ const PRESET = {
   host: "CHINEZU",
   roster: ["ANDREI", "ANDU", "CHINEZU", "KOSTICA", "MARIUS B", "MARIUS PDM", "MIRCEA", "REMUS"],
 };
+// punctajul oficial al turneului live (doar gazda mesei permanente îl modifică)
+const OFFICIAL = new OfficialStore(PRESET.roster);
+OFFICIAL.load();
+function isOfficialAdmin(token) { const d = verify(token); return !!(d && d.h && d.c === PRESET.code); }
+function broadcastAll(event, data) {
+  const msg = "event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n";
+  for (const set of streams.values()) for (const s of set) { try { s.res.write(msg); } catch (_) {} }
+}
 function ensurePreset() {
   let room = rooms.get(PRESET.code);
   if (!room) { room = wireRoom(new Room(PRESET.code, null)); rooms.set(PRESET.code, room); }
@@ -71,12 +80,34 @@ function ensurePreset() {
   return room;
 }
 
+// „Masa mea”: masă privată de antrenament cu boți, una pentru fiecare jucător (setări fixe)
+function practiceCode(name) {
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const h = crypto.createHmac("sha256", SECRET).update("practice:" + String(name).toLowerCase()).digest();
+  return "M" + Array.from(h.subarray(0, 5), b => A[b % A.length]).join("");
+}
+function ensurePractice(code, name) {
+  let room = rooms.get(code);
+  if (!room) {
+    room = wireRoom(new Room(code, null, { rebuyUntilLevel: 60, rebuyMax: 20, maxPlayers: 8, lateEntry: false }));
+    room.practice = true; room.ownerName = name;
+    rooms.set(code, room);
+  }
+  let p = room.findByName(name);
+  const t = sign(code, name, true);
+  if (!p) p = room.addPlayer(name, t, true, true);
+  else p.token = t;
+  room.hostToken = t;
+  return { room, p };
+}
+
 // găsește sau reface masa și jucătorul dintr-un link semnat
 function fromSigned(token, code) {
   const d = verify(token);
   if (!d || (code && d.c !== code)) return null;
   let room = rooms.get(d.c);
   if (!room && d.c === PRESET.code) room = ensurePreset();
+  if (!room && /^M[A-Z0-9]{5}$/.test(d.c) && d.h) return ensurePractice(d.c, d.n);
   if (!room) { room = wireRoom(new Room(d.c, null)); rooms.set(d.c, room); room.addLog("Masa a fost refăcută."); }
   let p = room.byToken(token);
   if (!p) {
@@ -103,7 +134,7 @@ function json(res, code, obj) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", c => { data += c; if (data.length > 3e5) { reject(new Error("prea mare")); req.destroy(); } });
+    req.on("data", c => { data += c; if (data.length > 4e5) { reject(new Error("prea mare")); req.destroy(); } });
     req.on("end", () => { try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(new Error("JSON invalid")); } });
     req.on("error", reject);
   });
@@ -118,9 +149,19 @@ function broadcast(room) {
   }
 }
 
+function sendTo(room, token, event, data) {
+  const set = streams.get(room.code);
+  if (!set) return;
+  const msg = "event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n";
+  for (const s of set) if (s.token === token) { try { s.res.write(msg); } catch (_) {} }
+}
+// servere ICE pentru voce: STUN public gratuit; un releu TURN se poate adăuga din Render (TURN_URL, TURN_USER, TURN_PASS)
+const ICE_SERVERS = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+if (process.env.TURN_URL) ICE_SERVERS.push({ urls: process.env.TURN_URL.split(","), username: process.env.TURN_USER || "", credential: process.env.TURN_PASS || "" });
+
 function serveStatic(req, res) {
   let p = decodeURIComponent(new URL(req.url, "http://x").pathname);
-  if (p === "/" || p.startsWith("/masa/")) p = "/index.html";
+  if (p === "/" || p === "/punctaj" || p.startsWith("/masa/")) p = "/index.html";
   const file = path.normalize(path.join(PUBLIC, p));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, buf) => {
@@ -136,6 +177,26 @@ async function api(req, res, url) {
 
   if (req.method === "GET" && route === "defaults") return json(res, 200, DEFAULT_SETTINGS);
 
+  if (req.method === "GET" && route === "official") {
+    const p = OFFICIAL.payload();
+    p.canEdit = isOfficialAdmin(url.searchParams.get("token"));
+    return json(res, 200, p);
+  }
+  if (req.method === "POST" && route === "official") {
+    let body; try { body = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
+    if (!isOfficialAdmin(body.token)) return json(res, 403, { error: "Doar organizatorul poate modifica punctajul oficial." });
+    const d = body.data;
+    if (!d || typeof d !== "object" || !Array.isArray(d.players) || typeof d.nights !== "object" || JSON.stringify(d).length > 250000) return json(res, 400, { error: "Date invalide." });
+    try {
+      const r = await OFFICIAL.save({ players: d.players.map(String).slice(0, 20), nights: d.nights });
+      broadcastAll("official", OFFICIAL.payload());
+      return json(res, 200, r);
+    } catch (e) {
+      broadcastAll("official", OFFICIAL.payload());
+      return json(res, 502, { error: e.message });
+    }
+  }
+  if (req.method === "GET" && route === "ice") return json(res, 200, { iceServers: ICE_SERVERS });
   if (req.method === "GET" && route === "vapid") return json(res, 200, { key: VAPID.publicB64 });
   if (req.method === "GET" && route === "pushmsg") {
     const msg = pushMsgs.get(String(url.searchParams.get("endpoint") || ""));
@@ -199,6 +260,7 @@ async function api(req, res, url) {
     if (route === "join") {
       const existing = body.token && room.byToken(body.token);
       if (existing) { broadcast(room); return json(res, 200, { code: room.code, token: existing.token }); }
+      if (room.practice) throw new Error("Aceasta este masa de antrenament a altui jucător.");
       const name = String(body.name || "").trim().slice(0, 18);
       if (!name) throw new Error("Scrie-ți numele.");
       const same = room.findByName(name);
@@ -217,7 +279,28 @@ async function api(req, res, url) {
     const host = p.token === room.hostToken;
     const needHost = () => { if (!host) throw new Error("Doar gazda poate face asta."); };
 
+    if (room.practice && ["restore", "settings", "event", "addplayer", "approve", "makehost", "rename", "setchips", "shuffle"].includes(route)) {
+      if (route === "restore") return json(res, 200, { ok: true });
+      throw new Error("La masa de antrenament setările sunt fixe: poți doar să joci și să adaugi boți.");
+    }
     switch (route) {
+      case "practice": {
+        const d = verify(p.token);
+        const name = d ? d.n : p.name;
+        const code = practiceCode(name);
+        const r = ensurePractice(code, name);
+        return json(res, 200, { code, token: r.p.token, url: "/masa/" + code + "/" + r.p.token });
+      }
+      case "practiceStart": {
+        needHost();
+        if (!room.practice) throw new Error("Doar la masa de antrenament.");
+        room.settings = require("./engine").sanitizeSettings({ ...DEFAULT_SETTINGS, rebuyUntilLevel: 60, rebuyMax: 20, maxPlayers: 8 });
+        if (room.started && !room.finished) room.abortGame();
+        if (room.players.filter(x => x.bot).length === 0) room.addBot();
+        room.newEvent("simplu", false, 1, now);
+        room.start(now);
+        break;
+      }
       case "act": room.act(p.token, body.type, body.amount, now); break;
       case "chat": room.addChat(p, body.text); break;
       case "emoji": room.emoji(p, body.e, now); break;
@@ -226,6 +309,7 @@ async function api(req, res, url) {
       case "seat": room.chooseSeat(p, body.seat); break;
       case "settings": {
         needHost();
+        if (room.practice) throw new Error("La masa de antrenament setările sunt fixe.");
         const { sanitizeSettings } = require("./engine");
         room.settings = sanitizeSettings(body.settings, room.settings);
         room.addLog("Gazda a schimbat setările mesei" + (room.started && !room.finished ? " (se aplică de la mâna sau nivelul următor)." : "."));
@@ -233,7 +317,7 @@ async function api(req, res, url) {
       }
       case "start": needHost(); if (room.started && !room.finished) throw new Error("Jocul a început deja."); room.start(now); break;
       case "restart": needHost(); room.restart(now); break;
-      case "bot": needHost(); if (room.players.length >= room.settings.maxPlayers) throw new Error("Masa este plină."); room.addBot(); break;
+      case "bot": needHost(); if (room.players.length >= room.settings.maxPlayers || (room.practice && room.players.filter(x => x.bot).length >= 7)) throw new Error(room.practice ? "Poți avea cel mult 7 boți." : "Masa este plină."); room.addBot(); break;
       case "removebots": needHost(); room.removeBots(now); break;
       case "abort": needHost(); if (room.started && !room.finished) { room.abortGame(); room.addLog("Gazda a oprit jocul (fără rezultat) și s-a întors la meniul inițial."); } break;
       case "extra": room.extraTime(p.token, now); break;
@@ -252,6 +336,14 @@ async function api(req, res, url) {
         return json(res, 200, { ok: true });
       }
       case "visible": p.visible = !!body.visible; return json(res, 200, { ok: true });
+      case "talk": p.talking = !!body.on; break; // microfon pornit / oprit (se vede 🎤 la masă)
+      case "rtc": {
+        // mesajele de legătură pentru voce (offer / answer / ice / bye) merg direct la celălalt jucător
+        const target = room.players.find(x => x.id === body.to);
+        if (!target || !body.data || JSON.stringify(body.data).length > 20000) return json(res, 400, { error: "Mesaj invalid." });
+        sendTo(room, target.token, "rtc", { from: p.id, data: body.data });
+        return json(res, 200, { ok: true });
+      }
       case "approve": {
         needHost();
         const target = room.players.find(x => x.id === body.playerId);
@@ -330,7 +422,7 @@ setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
     const watchers = streams.get(code);
-    if ((!watchers || watchers.size === 0) && now - room.touched > 12 * 3600 * 1000) { rooms.delete(code); streams.delete(code); }
+    if ((!watchers || watchers.size === 0) && now - room.touched > (room.practice ? 10 * 60 * 1000 : 12 * 3600 * 1000)) { rooms.delete(code); streams.delete(code); }
   }
 }, 10 * 60 * 1000);
 

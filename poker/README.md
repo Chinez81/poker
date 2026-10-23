@@ -29,3 +29,10 @@ Ai nevoie de Node.js 18 sau mai nou. În folder: `npm start`, apoi deschizi http
 1. Pune fișierele într-un repository pe GitHub.
 2. Pe render.com: New → Web Service → alegi repository-ul.
 3. Runtime: Node · Build command: `npm install` · Start command: `npm start` · Instance type: Free.
+
+## Punctajul oficial (salvare pe GitHub)
+În Render → Environment adaugă: `GITHUB_TOKEN` (cod de acces fine-grained cu „Contents: Read and write” pe acest repository)
+și `GITHUB_REPO` (ex. `Chinez81/poker`). Punctajul se salvează în ramura `punctaj`, fișierul `punctaj-oficial.json`.
+
+## Voce
+Folosește STUN public. Dacă unii jucători nu se aud, adaugă un releu TURN în Render: `TURN_URL`, `TURN_USER`, `TURN_PASS`.
