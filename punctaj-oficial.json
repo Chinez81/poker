@@ -1,5 +1,5 @@
 {
- "savedAt": 1792764829288,
+ "savedAt": 1792770666147,
  "data": {
   "players": [
    "ANDREI",
@@ -20,7 +20,26 @@
     "paid": {
      "ANDREI": "2026-10-16"
     },
-    "pts": {},
+    "pts": {
+     "g1": {
+      "ANDU": 2,
+      "CHINEZU": 4,
+      "KOSTICA": 5,
+      "MARIUS B": 8,
+      "MARIUS PDM": 6,
+      "MIRCEA": 3,
+      "REMUS": 7
+     },
+     "g2": {
+      "ANDU": 2,
+      "CHINEZU": 5,
+      "KOSTICA": 3,
+      "MARIUS B": 8,
+      "MARIUS PDM": 4,
+      "MIRCEA": 7,
+      "REMUS": 6
+     }
+    },
     "note": ""
    },
    "s02": {
