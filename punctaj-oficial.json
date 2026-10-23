@@ -1,5 +1,5 @@
 {
- "savedAt": 1792741116381,
+ "savedAt": 1792744971610,
  "data": {
   "players": [
    "ANDREI",
@@ -17,7 +17,9 @@
     "absent": {
      "ANDREI": true
     },
-    "paid": {},
+    "paid": {
+     "ANDREI": "2026-10-23"
+    },
     "pts": {},
     "note": ""
    }
