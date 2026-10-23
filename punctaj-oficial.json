@@ -1,0 +1,26 @@
+{
+ "savedAt": 1792741116381,
+ "data": {
+  "players": [
+   "ANDREI",
+   "ANDU",
+   "CHINEZU",
+   "KOSTICA",
+   "MARIUS B",
+   "MARIUS PDM",
+   "MIRCEA",
+   "REMUS"
+  ],
+  "nights": {
+   "s01": {
+    "date": "2026-10-09",
+    "absent": {
+     "ANDREI": true
+    },
+    "paid": {},
+    "pts": {},
+    "note": ""
+   }
+  }
+ }
+}
