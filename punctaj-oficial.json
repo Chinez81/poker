@@ -1,5 +1,5 @@
 {
- "savedAt": 1792770837063,
+ "savedAt": 1792770861459,
  "data": {
   "players": [
    "ANDREI",
@@ -93,6 +93,16 @@
       "MARIUS PDM": 4,
       "MIRCEA": 8,
       "REMUS": 1
+     },
+     "g3": {
+      "ANDREI": 6,
+      "ANDU": 3,
+      "CHINEZU": 7,
+      "KOSTICA": 5,
+      "MARIUS B": 2,
+      "MARIUS PDM": 8,
+      "MIRCEA": 1,
+      "REMUS": 4
      }
     },
     "note": ""
