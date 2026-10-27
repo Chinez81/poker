@@ -515,6 +515,65 @@
     if (screen !== want) { screen = want; want === "table" ? buildTable() : buildLobby(); }
     want === "table" ? updateTable() : updateLobby();
     if (drawer) updateDrawer();
+    checkInvite();
+  }
+
+  // ---------- invitația la turneu ----------
+  let invShownAt = 0, invModal = null;
+  const invWhat = () => S.event && !S.event.done && S.event.type === "simplu" ? "joc" : "turneu";
+  function invitePanelHtml() {
+    if (!S || S.practice) return "";
+    const inv = S.invite, me = S.players.find(p => p.me);
+    if (!S.isHost) {
+      if (!inv) return "";
+      const a = inv.answers[me.id];
+      return `<section class="panel invpanel"><h2>🏆 Invitație la ${invWhat()}</h2><p class="hint">${esc(inv.by)} te invită să joci. ${a === "da" ? "<b>Ai spus: ✅ Particip.</b>" : a === "nu" ? "<b>Ai spus: ❌ Nu pot.</b>" : "Răspunde acum:"}</p>
+        <div class="share"><button class="btn ${a === "da" ? "" : "primary"}" data-act="inviteYes" style="flex:1" ${a === "da" ? "disabled" : ""}>✅ Particip</button><button class="btn" data-act="inviteNo" style="flex:1" ${a === "nu" ? "disabled" : ""}>❌ Nu pot</button></div></section>`;
+    }
+    const others = S.players.filter(p => !p.bot && !p.me);
+    let h = `<section class="panel invpanel"><h2>📨 Invitație la ${invWhat()}</h2>`;
+    if (!inv) return h + `<p class="hint">Toți primesc o notificare pe telefon (cine are notificările pornite) și răspund „Particip” sau „Nu pot”. Când pornești jocul, primesc cărți doar cei care au acceptat.</p>
+      <button class="btn primary wide" data-act="sendInvite">📨 Trimite invitația tuturor</button></section>`;
+    const cnt = k => others.filter(p => (inv.answers[p.id] || "") === k).length;
+    h += `<p class="hint"><b>✅ ${cnt("da")} participă · ❌ ${cnt("nu")} nu pot · ⏳ ${cnt("")} n-au răspuns</b></p><div class="plist">`;
+    h += others.map(p => {
+      const a = inv.answers[p.id], l = personalLink(p);
+      const msg = encodeURIComponent(`🏆 ${me.name} te invită la ${invWhat()}! Intră acum și apasă „Particip”: ${l}`);
+      return `<div class="pl"><span class="dot ${p.connected ? "on" : ""}"></span><span class="nm">${esc(p.name)}</span><span class="tag ${a ? "" : "muted"}">${a === "da" ? "✅ participă" : a === "nu" ? "❌ nu poate" : "⏳ așteptăm"}</span>${!a && l ? `<a class="btn small" href="https://wa.me/?text=${msg}" target="_blank" rel="noopener">WhatsApp</a>` : ""}</div>`;
+    }).join("");
+    return h + `</div><div class="share"><button class="btn" data-act="sendInvite">🔔 Trimite din nou</button><button class="btn" data-act="copyInviteGroup">📋 Mesaj pentru grup</button><button class="btn small" data-act="cancelInvite" data-label="Anulează invitația">Anulează</button></div>
+      <p class="hint">La „Începe jocul” primesc cărți doar tu, boții și cei cu ✅. Cine acceptă mai târziu intră direct, de la mâna următoare.</p></section>`;
+  }
+  function closeInviteModal() { if (invModal) { invModal.remove(); invModal = null; } }
+  function checkInvite() {
+    if (!S || !S.myInvite) return closeInviteModal();
+    if (S.invite.at === invShownAt) return;
+    invShownAt = S.invite.at;
+    closeInviteModal();
+    invModal = document.createElement("div"); invModal.className = "modal";
+    invModal.innerHTML = `<div class="modal-box"><div style="font-size:52px">🏆</div><h3>Invitație la ${invWhat()}</h3>
+      <p class="hint">${esc(S.invite.by)} te invită să intri acum în ${invWhat() === "turneu" ? "turneu" : "joc"}.</p>
+      <button class="btn primary wide" data-act="inviteYes">✅ Particip</button><button class="btn wide" data-act="inviteNo">❌ Nu pot acum</button></div>`;
+    invModal.onclick = async e => { const b = e.target.closest("[data-act]"); if (b) { try { await inviteAction(b.dataset.act, b); } catch (err) { toast(err.message); } } };
+    document.body.appendChild(invModal);
+    try { audio(); SND.win(); } catch (_) {}
+    vib([300, 120, 300]);
+  }
+  async function inviteAction(a, b) {
+    if (a === "sendInvite") { await post("invite"); toast("Invitația a fost trimisă."); return true; }
+    if (a === "cancelInvite") { if (confirmed("cancelInvite", b, "Sigur? Apasă din nou")) await post("invite", { cancel: true }); return true; }
+    if (a === "copyInviteGroup") {
+      const t = `🏆 Începem ${invWhat() === "turneu" ? "turneul" : "jocul"}! Intrați în aplicație cu linkul vostru și apăsați „Particip”. ${location.origin}`;
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => toast("Mesaj copiat. Lipește-l pe grupul de WhatsApp."), () => toast(t)); else toast(t);
+      return true;
+    }
+    if (a === "inviteYes" || a === "inviteNo") {
+      await post("inviteReply", { ok: a === "inviteYes" });
+      closeInviteModal();
+      toast(a === "inviteYes" ? "Super! Ești în joc. ✅" : "Am anunțat gazda că nu poți acum.");
+      return true;
+    }
+    return false;
   }
 
   // ---------- confirmare în doi pași ----------
@@ -551,6 +610,7 @@
         <div class="share"><div class="link" id="shareLink">${esc(location.origin + "/masa/" + S.code)}</div><button class="btn" data-act="copy">Copiază linkul</button></div>
         <p class="hint">Trimite linkul prietenilor. Ei își scriu doar numele și intră, fără cont.</p></section>
       <section class="panel"><h2>Ce jucăm</h2><div id="eventArea"></div></section>
+      <div id="invArea"></div>
       <div id="results"></div>
       <section class="panel"><h2>Jucători <span class="aside" id="pcount"></span></h2><div class="plist" id="plist"></div><div id="mySit"></div></section>
       <div id="inviteArea"></div>
@@ -642,7 +702,8 @@
       <div class="seg2"><button class="${evType === "simplu" ? "on" : ""}" data-act="evType" data-v="simplu">Joc simplu</button><button class="${evType === "turneu" ? "on" : ""}" data-act="evType" data-v="turneu">Turneu</button></div>
       ${evType === "turneu" ? `<label class="f">Câte jocuri are turneul<input class="t num" type="number" id="evGames" min="1" max="50" value="${evGames}"></label>` : `<p class="hint">Un singur joc. Reintrarea (rebuy) e permisă doar aici, dacă e activată în setări.</p>`}
       <label class="switch"><input type="checkbox" id="evScoring" ${evScoring ? "checked" : ""}> Cu punctaj (locul 1 = 8 p … locul 8 = 1 p)</label>
-      <button class="btn primary wide" data-act="newEvent">${evType === "turneu" ? "Pornește turneul" : "Pornește jocul"}</button>
+      <button class="btn primary wide" data-act="newEventInvite">📨 Trimite invitația și așteaptă răspunsurile</button>
+      <button class="btn wide" data-act="newEvent">${evType === "turneu" ? "Pornește turneul acum (fără invitație)" : "Pornește jocul acum (fără invitație)"}</button>
       ${ev && !ev.done ? `<button class="btn small" data-act="chooserClose">Înapoi</button>` : ""}</div>`;
   }
   function playersHtml(inGame) {
@@ -672,6 +733,7 @@
       return;
     }
     patch("eventArea", eventHtml());
+    patch("invArea", invitePanelHtml());
     patch("inviteArea", inviteHtml());
     patch("notifArea", notifHtml());
     patch("appArea", appHtml());
@@ -699,7 +761,7 @@
   function updateStartArea() {
     const n = S.players.length;
     patch("startArea", S.isHost
-      ? `${draftDirty ? `<button class="btn wide" data-act="saveSettings" style="margin-bottom:10px">Salvează setările</button>` : ""}${S.event && !S.event.done ? `<button class="btn primary wide" data-act="start" ${n < 2 ? "disabled" : ""}>${S.event.type === "turneu" ? `Începe jocul ${S.event.gamesDone + 1} din ${S.event.totalGames}` : "Începe jocul"}</button>` : `<p class="hint" style="text-align:center">Alege mai sus: joc simplu sau turneu.</p>`}${n < 2 ? `<p class="hint" style="text-align:center">Este nevoie de cel puțin 2 jucători.</p>` : ""}`
+      ? `${draftDirty ? `<button class="btn wide" data-act="saveSettings" style="margin-bottom:10px">Salvează setările</button>` : ""}${S.event && !S.event.done ? `<button class="btn primary wide" data-act="start" ${n < 2 ? "disabled" : ""}>${S.event.type === "turneu" ? `Începe jocul ${S.event.gamesDone + 1} din ${S.event.totalGames}` : "Începe jocul"}${S.invite ? ` (${S.players.filter(p => p.bot || p.me || S.invite.answers[p.id] === "da").length} participă)` : ""}</button>` : `<p class="hint" style="text-align:center">Alege mai sus: joc simplu sau turneu.</p>`}${n < 2 ? `<p class="hint" style="text-align:center">Este nevoie de cel puțin 2 jucători.</p>` : ""}`
       : `<div class="panel"><p class="hint" style="text-align:center">Așteptăm ca gazda să pornească jocul…</p><button class="btn small" data-act="leave" data-label="Ieși de la masă">Ieși de la masă</button></div>`);
   }
   function settingsRead() {
@@ -709,6 +771,7 @@
       <span>Durata unui nivel</span><b>${s.levelMin} min</b>
       <span>Timp de gândire</span><b>${s.turnSec} sec${s.timeBankSec ? ` + buton de ${s.timeBankSec} sec extra` : ""}</b>
       <span>Dublare blind-uri</span><b>${s.doubleAt3 ? `când rămân ${s.doubleFrom} jucători` : "nu"}</b>
+      <span>Blind-urile cresc și la eliminare</span><b>${s.bustLevelUp ? "da, la fiecare jucător ieșit" : "nu"}</b>
       <span>Reintrare (doar la joc simplu)</span><b>${s.rebuyUntilLevel ? `până la nivelul ${s.rebuyUntilLevel}, de ${s.rebuyMax} ori` : "nu"}</b>
       <span>Intrare în timpul jocului</span><b>joc simplu: direct · turneu: cu acordul gazdei</b>
       <span>Pauze</span><b>${s.breakEveryMin ? `${s.breakMin} min la fiecare ${s.breakEveryMin} min` : "nu"}</b>
@@ -726,6 +789,7 @@
     <h3 class="sub">Blind-uri</h3>
     <label class="switch"><input type="checkbox" data-k="doubleAt3" ${d.doubleAt3 ? "checked" : ""}> Dublează blind-urile la fiecare nivel când rămân
       <input class="t num mini" type="number" data-k="doubleFrom" value="${d.doubleFrom}" min="2" max="9"> jucători</label>
+    <label class="switch"><input type="checkbox" data-k="bustLevelUp" ${d.bustLevelUp ? "checked" : ""}> Blind-urile cresc imediat cu un nivel la fiecare jucător eliminat (și nivelul nou durează din nou ${d.levelMin} min)</label>
     <div><div class="lvhead"><span>Nivel</span><span>Small blind</span><span>Big blind</span><span></span></div><div class="levels">`;
     d.structure.forEach((l, i) => h += `<div class="lv"><span class="n">${i + 1}</span><input type="number" inputmode="numeric" data-lv="${i}" data-j="0" value="${l[0]}"><input type="number" inputmode="numeric" data-lv="${i}" data-j="1" value="${l[1]}"><button class="x" data-act="dellv" data-i="${i}" aria-label="Șterge nivelul ${i + 1}">×</button></div>`);
     h += `</div></div><div class="share"><button class="btn small" data-act="addlv">+ Adaugă nivel</button><button class="btn small" data-act="resetlv">Structura standard</button><button class="btn small" data-act="resetall">Toate setările standard</button></div>
@@ -774,6 +838,7 @@
       if (await settingsAction(a, b)) return;
       if (await eventAction(a, b)) return;
       if (await practiceAction(a, b)) return;
+      if (await inviteAction(a, b)) return;
       if (a === "copy") copy(location.origin + "/masa/" + S.code);
       else if (a === "score") openDrawer("score");
       else if (a === "official") openOfficial();
@@ -800,6 +865,14 @@
     if (a === "chooser") { chooserOpen = true; patch("eventArea", eventHtml()); return true; }
     if (a === "chooserClose") { chooserOpen = false; patch("eventArea", eventHtml()); return true; }
     if (a === "evType") { readChooser(b.closest(".chooser")); evType = b.dataset.v; store.set("poker:evType", evType); rerenderChooser(); return true; }
+    if (a === "newEventInvite") {
+      readChooser(b.closest(".chooser"));
+      if (draftDirty) { await post("settings", { settings: draft }); draftDirty = false; }
+      await post("event", { type: evType, scoring: evScoring, totalGames: evGames, startNow: false });
+      await post("invite");
+      chooserOpen = false; toast("Invitația a fost trimisă. Vezi mai jos cine participă.");
+      return true;
+    }
     if (a === "newEvent" || a === "newEventNow") {
       const box = b.closest(".chooser"); readChooser(box);
       if (a === "newEventNow" && !confirmed("newEventNow", b, "Jocul curent se oprește. Apasă din nou")) return true;
@@ -1000,6 +1073,7 @@
       if (a === "score") return openDrawer("score");
       if (a === "official") return openOfficial();
       if (await practiceAction(a, b)) return;
+      if (await inviteAction(a, b)) return;
       if (a === "sound") return openDrawer("me");
       if (a === "hostmenu") return openDrawer("host");
       if (a === "mic") return micToggle();
@@ -1113,6 +1187,7 @@
       if (a === "sitOut") return await post("sit", { mode: "out" });
       if (await eventAction(a, b)) return;
       if (await practiceAction(a, b)) return;
+      if (await inviteAction(a, b)) return;
       if (a === "official") return openOfficial();
       if (a === "leave") { if (confirmed("leave", b)) await leave(); return; }
       if (a === "pause") return await post("pause");
@@ -1185,6 +1260,7 @@
         <div class="share"><button class="btn" data-act="stop" data-label="Încheie jocul acum">Încheie jocul acum</button><button class="btn red" data-act="restart" data-label="Reîncepe de la zero">Reîncepe de la zero</button></div>
         <button class="btn" data-act="abort" data-label="Oprește și mergi la meniul inițial">Oprește și mergi la meniul inițial</button>
         <p class="hint">„Încheie” face clasamentul după fise. „Reîncepe” anulează jocul și împarte din nou fisele tuturor. „Meniul inițial” oprește jocul fără rezultat: acolo alegi alt joc sau turneu și schimbi orice setare.</p>
+        ${invitePanelHtml()}
         <h3 class="sub">Joc sau turneu nou</h3>
         <div class="chooser">
           <div class="seg2"><button class="${evType === "simplu" ? "on" : ""}" data-act="evType" data-v="simplu">Joc simplu</button><button class="${evType === "turneu" ? "on" : ""}" data-act="evType" data-v="turneu">Turneu</button></div>

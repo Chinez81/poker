@@ -78,6 +78,7 @@ const DEFAULT_SETTINGS = {
   structure: Array.from({ length: 30 }, (_, i) => [500 * (i + 1), 1000 * (i + 1)]), // 500/1.000, 1.000/2.000 … 15.000/30.000
   doubleAt3: true,
   doubleFrom: 3,
+  bustLevelUp: true, // la fiecare jucător eliminat, blind-urile urcă imediat un nivel
   turnSec: 20,
   timeBankSec: 20,
   nextHandSec: 4,
@@ -106,6 +107,7 @@ function sanitizeSettings(s, base) {
   out.nextHandSec = int(s.nextHandSec, 2, 30, out.nextHandSec);
   out.doubleAt3 = bool(s.doubleAt3, out.doubleAt3);
   out.doubleFrom = int(s.doubleFrom, 2, 9, out.doubleFrom);
+  out.bustLevelUp = bool(s.bustLevelUp, out.bustLevelUp);
   out.pointsEnabled = bool(s.pointsEnabled, out.pointsEnabled);
   out.antePct = int(s.antePct, 0, 100, out.antePct);
   out.anteFromLevel = int(s.anteFromLevel, 1, 60, out.anteFromLevel);
@@ -197,6 +199,27 @@ class Room {
   joinRunning(p) {
     p.spectator = false; p.pending = false; p.waiting = true; p.out = false; p.place = null; p.sitOut = false; p.sitOutOnce = false;
     p.chips = this.settings.stack; p.bank = this.settings.timeBankSec * 1000;
+  }
+  // invitația la turneu: gazda o trimite, fiecare răspunde „Particip” sau „Nu pot”
+  inviteActive(now) { return !!(this.invite && (now || Date.now()) - this.invite.at < 4 * 3600 * 1000); }
+  sendInvite(byName, now) {
+    if (!this.inviteActive(now)) this.invite = { at: now, by: byName, answers: {} };
+    else this.invite.at = now; // retrimisă: păstrăm răspunsurile date
+    this.addLog(`${byName} a trimis invitația la ${this.isTournament() ? "turneu" : "joc"}.`);
+    return this.players.filter(p => !p.bot && p.token !== this.hostToken && !(p.token in this.invite.answers));
+  }
+  cancelInvite() { this.invite = null; this.addLog("Invitația a fost anulată."); }
+  answerInvite(p, yes) {
+    if (!this.inviteActive()) throw new Error("Invitația nu mai este valabilă.");
+    this.invite.answers[p.token] = yes ? "da" : "nu";
+    if (yes) {
+      p.sitOut = false; p.sitOutOnce = false; p.autoSit = false; p.pending = false;
+      if (this.gameRunning() && (p.spectator || p.out) && !p.out) { this.joinRunning(p); this.addLog(`${p.name} a acceptat invitația și intră în joc de la mâna următoare.`); }
+      else { if (!this.gameRunning()) p.spectator = false; this.addLog(`${p.name} a acceptat invitația: participă. ✅`); }
+    } else {
+      if (!this.gameRunning()) p.sitOut = true;
+      this.addLog(`${p.name} nu poate participa acum. ❌`);
+    }
   }
   // la turneu, intrarea în timpul jocului se face doar cu acordul gazdei
   requestJoin(p) {
@@ -326,7 +349,8 @@ class Room {
 
   // ----- desfășurarea jocului -----
   start(now) {
-    const ps = this.players.filter(p => !p.leaving && !p.sitOut && p.seen);
+    const inv = this.inviteActive(now) ? this.invite.answers : null;
+    const ps = this.players.filter(p => !p.leaving && !p.sitOut && p.seen && (!inv || p.bot || p.token === this.hostToken || inv[p.token] === "da"));
     if (ps.length < 2) throw new Error("Este nevoie de cel puțin 2 jucători prezenți la masă (care și-au deschis linkul și nu stau deoparte).");
     if (!this.event || this.event.done) throw new Error("Alege întâi: joc simplu sau turneu.");
     if (this.settings.shuffleSeats) this.shuffleSeats();
@@ -650,6 +674,11 @@ class Room {
       this.nextHandAt = 0;
       return this.finishGame(now);
     }
+    // blind-urile cresc imediat cu un nivel pentru fiecare jucător eliminat; nivelul nou are din nou timpul întreg
+    if (busted.length && this.settings.bustLevelUp) {
+      busted.forEach(p => { this.addLog(`${p.name} a ieșit: blind-urile urcă un nivel.`); this.nextLevel(now); });
+      this.levelEndsAt = now + this.settings.levelMin * 60000;
+    }
     this.nextHandAt = now + this.settings.nextHandSec * 1000;
   }
   rebuyOpen() {
@@ -813,6 +842,8 @@ class Room {
       rebuyOpen: this.rebuyOpen(),
       canRebuy: !!(me && me.out && this.rebuyOpen() && (this.practice || me.rebuys < this.settings.rebuyMax)),
       practice: !!this.practice,
+      invite: this.inviteActive(now) ? { by: this.invite.by, at: this.invite.at, answers: Object.fromEntries(this.players.filter(p => p.token in this.invite.answers).map(p => [p.id, this.invite.answers[p.token]])) } : null,
+      myInvite: !!(me && this.inviteActive(now) && !me.bot && token !== this.hostToken && !(token in this.invite.answers) && !(this.gameRunning() && !me.spectator && !me.out)),
       myBankMs: me ? me.bank : 0,
       canShow: !!(h && h.done && me && h.holes[token] && !h.reveal[token]),
       players,

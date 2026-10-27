@@ -40,11 +40,11 @@ const VAPID = Push.vapidKeys(SECRET);
 const PUSH_SUBJECT = "mailto:poker-intre-prieteni@example.com";
 const pushMsgs = new Map(); // endpoint -> ultimul mesaj
 function wireRoom(room) {
-  room.notify = (p, kind) => {
+  room.notify = (p, kind, custom) => {
     if (!p.push) return;
     const visible = p.conns > 0 && p.visible !== false;
     if (visible) return; // e cu ochii pe masă: primește alertele direct în pagină
-    const msg = kind === "10s"
+    const msg = custom ? { ...custom } : kind === "10s"
       ? { title: "⏰ Mai ai 10 secunde!", body: `Masa ${room.code}: decide acum, altfel se face automat check sau fold.`, tag: "turn-" + room.code }
       : { title: "♠ E rândul tău!", body: `Masa ${room.code}: ai ${room.settings.turnSec} secunde să decizi.`, tag: "turn-" + room.code };
     msg.url = "/masa/" + room.code + "/" + (p.token.startsWith("s.") ? p.token : "");
@@ -299,6 +299,21 @@ async function api(req, res, url) {
         if (room.players.filter(x => x.bot).length === 0) room.addBot();
         room.newEvent("simplu", false, 1, now);
         room.start(now);
+        break;
+      }
+      case "invite": {
+        needHost();
+        if (room.practice) throw new Error("La masa de antrenament nu se trimit invitații.");
+        if (body.cancel) { room.cancelInvite(); break; }
+        const what = room.isTournament() ? "turneu" : "joc";
+        const list = room.sendInvite(p.name, now);
+        list.forEach(x => { try { room.notify(x, "invite", { title: `🏆 Invitație la ${what}!`, body: `${p.name} te invită să intri acum. Atinge aici și apasă „Particip”.`, tag: "invite-" + room.code }); } catch (_) {} });
+        break;
+      }
+      case "inviteReply": {
+        room.answerInvite(p, !!body.ok);
+        const host = room.byToken(room.hostToken);
+        if (host && host !== p) try { room.notify(host, "answer", { title: body.ok ? `✅ ${p.name} participă` : `❌ ${p.name} nu poate`, body: "Răspuns la invitația ta.", tag: "answer-" + room.code }); } catch (_) {}
         break;
       }
       case "act": room.act(p.token, body.type, body.amount, now); break;
