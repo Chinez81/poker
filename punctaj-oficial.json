@@ -1,5 +1,5 @@
 {
- "savedAt": 1792794338854,
+ "savedAt": 1793380747458,
  "data": {
   "players": [
    "ANDREI",
@@ -181,6 +181,17 @@
       "REMUS": 6,
       "ANDU": 7,
       "MARIUS B": 8
+     }
+    },
+    "note": ""
+   },
+   "s04": {
+    "date": "2026-10-30",
+    "absent": {},
+    "paid": {},
+    "pts": {
+     "g1": {
+      "REMUS": 1
      }
     },
     "note": ""
