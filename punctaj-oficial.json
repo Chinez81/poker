@@ -1,5 +1,5 @@
 {
- "savedAt": 1793383334398,
+ "savedAt": 1793385128657,
  "data": {
   "players": [
    "ANDREI",
@@ -199,6 +199,10 @@
       "KOSTICA": 6,
       "ANDREI": 7,
       "MARIUS B": 8
+     },
+     "g2": {
+      "KOSTICA": 1,
+      "ANDREI": 2
      }
     },
     "note": ""
