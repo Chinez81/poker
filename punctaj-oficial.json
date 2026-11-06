@@ -1,5 +1,5 @@
 {
- "savedAt": 1793985385206,
+ "savedAt": 1793987081986,
  "data": {
   "players": [
    "ANDREI",
@@ -247,7 +247,12 @@
     "date": "2026-11-06",
     "absent": {},
     "paid": {},
-    "pts": {},
+    "pts": {
+     "g1": {
+      "MIRCEA": 1,
+      "REMUS": 2
+     }
+    },
     "note": ""
    }
   }
