@@ -13,10 +13,13 @@
   };
   let toastTimer = null;
   function toast(msg) { $toast.textContent = msg; $toast.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $toast.hidden = true, 3500); }
+  // codul acestui telefon (pentru Poker Friends: linkul merge doar pe telefonul aprobat de gazdă)
+  let DEV = store.get("poker:dev");
+  if (!DEV || !/^[a-z0-9]{8,40}$/.test(DEV)) { DEV = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => (b % 36).toString(36)).join("") + Date.now().toString(36); store.set("poker:dev", DEV); }
   async function post(route, body) {
-    const r = await fetch("/api/" + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ code, token }, body || {})) });
+    const r = await fetch("/api/" + route, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ code, token, dev: DEV }, body || {})) });
     let data = {}; try { data = await r.json(); } catch (_) {}
-    if (!r.ok) throw new Error(data.error || "Ceva nu a mers. Încearcă din nou.");
+    if (!r.ok) { const e = new Error(data.error || "Ceva nu a mers. Încearcă din nou."); e.data = data; throw e; }
     return data;
   }
   // înlocuiește conținutul doar dacă s-a schimbat și nimeni nu scrie în el
@@ -42,7 +45,12 @@
   const m = location.pathname.match(/^\/masa\/([A-Za-z0-9]{4,8})(?:\/(s\.[A-Za-z0-9_-]+\.[a-f0-9]{20}))?/);
   const urlCode = m ? m[1].toUpperCase() : null;
   const isPracticeCode = c => /^M[A-Z0-9]{5}$/.test(c || "");
-  if (m && m[2]) { store.set("poker:" + urlCode, m[2]); store.set(isPracticeCode(urlCode) ? "poker:practiceLink" : "poker:lastLink", location.pathname); } // link personal
+  if (m && m[2]) { // link personal
+    store.set("poker:" + urlCode, m[2]);
+    if (isPracticeCode(urlCode)) store.set("poker:practiceLink", location.pathname);
+    else if (urlCode === "FRIENDS") { store.set("poker:friendsLink", location.pathname); const ll = store.get("poker:lastLink"); if (!ll || ll.startsWith("/masa/FRIENDS/")) store.set("poker:lastLink", location.pathname); }
+    else store.set("poker:lastLink", location.pathname);
+  }
   // aplicația de pe ecranul principal se deschide direct la masa ta
   if (!m && location.pathname === "/" && store.get("poker:lastLink")) { location.replace(store.get("poker:lastLink")); }
   let restored = false;
@@ -79,31 +87,68 @@
     const g = ac.createGain(); g.gain.value = vol || 0.3;
     src.connect(f); f.connect(g); g.connect(master); src.start(t0);
   }
-  // clinchet de fise: impulsuri scurte de zgomot filtrat + un „ting” ceramic, la intervale neregulate
-  function chipClick(delay, vol) {
-    const ac = audioCtx; if (!ac || muted || volume === 0) return;
-    const t0 = ac.currentTime + delay, dur = 0.035;
-    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate), d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 3);
-    const src = ac.createBufferSource(); src.buffer = buf;
-    const bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 3000 + Math.random() * 2500; bp.Q.value = 3;
-    const g = ac.createGain(); g.gain.value = vol;
-    src.connect(bp); bp.connect(g); g.connect(master); src.start(t0);
-    tone(2600 + Math.random() * 1600, 0.04, "triangle", vol * 0.35, delay);
+  // ---------- sunete noi: fise reale pe postav, check, fold, raise ----------
+  function nbuf(dur, shape) {
+    const ac = audioCtx, n = Math.max(1, Math.floor(ac.sampleRate * dur));
+    const buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, shape || 2);
+    return buf;
   }
-  function chipRun(n, span, vol) { let t = 0; for (let i = 0; i < n; i++) { chipClick(t, vol * (0.7 + Math.random() * 0.5)); t += span / n * (0.5 + Math.random()); } }
+  // un clinchet de fisă: lovitura ceramică (două rezonanțe) + un „click” scurt
+  function clack(delay, vol, pitch) {
+    const ac = audioCtx; if (!ac || muted || volume === 0) return;
+    const t0 = ac.currentTime + delay, p = pitch || 1;
+    const src = ac.createBufferSource(); src.buffer = nbuf(0.03, 4);
+    const f1 = ac.createBiquadFilter(); f1.type = "bandpass"; f1.frequency.value = (3800 + Math.random() * 1600) * p; f1.Q.value = 6;
+    const f2 = ac.createBiquadFilter(); f2.type = "bandpass"; f2.frequency.value = (1700 + Math.random() * 500) * p; f2.Q.value = 4;
+    const g1 = ac.createGain(); g1.gain.value = vol; const g2 = ac.createGain(); g2.gain.value = vol * 0.55;
+    src.connect(f1); f1.connect(g1); g1.connect(master); src.connect(f2); f2.connect(g2); g2.connect(master);
+    src.start(t0);
+    const o = ac.createOscillator(), og = ac.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime((5200 + Math.random() * 1400) * p, t0);
+    og.gain.setValueAtTime(vol * 0.18, t0); og.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.035);
+    o.connect(og); og.connect(master); o.start(t0); o.stop(t0 + 0.05);
+  }
+  function clatter(n, span, vol, pitch) { let t = 0; for (let i = 0; i < n; i++) { clack(t, vol * (0.65 + Math.random() * 0.5), pitch); t += (span / n) * (0.4 + Math.random() * 1.1); } }
+  // alunecare pe postav (fise împinse / cărți aruncate)
+  function slide(dur, vol, f0, f1, delay) {
+    const ac = audioCtx; if (!ac || muted || volume === 0) return;
+    const t0 = ac.currentTime + (delay || 0);
+    const src = ac.createBufferSource(); src.buffer = nbuf(dur, 0.6);
+    const f = ac.createBiquadFilter(); f.type = "bandpass"; f.Q.value = 0.9;
+    f.frequency.setValueAtTime(f0, t0); f.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+    const g = ac.createGain(); g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + dur * 0.25); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(f); f.connect(g); g.connect(master); src.start(t0);
+  }
+  // bătaie în masă (check): impuls grav + lemn
+  function knock(delay, vol) {
+    const ac = audioCtx; if (!ac || muted || volume === 0) return;
+    const t0 = ac.currentTime + delay;
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = "sine"; o.frequency.setValueAtTime(190, t0); o.frequency.exponentialRampToValueAtTime(80, t0 + 0.09);
+    g.gain.setValueAtTime(vol, t0); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 0.14);
+    const src = ac.createBufferSource(); src.buffer = nbuf(0.04, 3);
+    const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 900;
+    const g2 = ac.createGain(); g2.gain.value = vol * 0.9;
+    src.connect(f); f.connect(g2); g2.connect(master); src.start(t0);
+  }
+  function chime(freqs, vol, delay, gap) { freqs.forEach((fq, i) => { tone(fq, 0.22, "sine", vol, (delay || 0) + i * (gap || 0.07)); tone(fq * 2, 0.12, "sine", vol * 0.25, (delay || 0) + i * (gap || 0.07)); }); }
   const SND = {
-    bet(big) { chipRun(big ? 9 : 5, big ? 0.32 : 0.18, 0.55); },
-    gather() { chipRun(10, 0.4, 0.4); },
-    collect() { chipRun(16, 0.8, 0.5); },
-    deal() { noise(0.06, 0.25, 0, 3000); noise(0.06, 0.2, 0.09, 3000); },
-    card() { noise(0.07, 0.25, 0, 2500); },
-    chips() { tone(2200, 0.05, "triangle", 0.15); tone(2600, 0.05, "triangle", 0.12, 0.05); tone(2400, 0.06, "triangle", 0.1, 0.1); },
-    check() { tone(180, 0.08, "sine", 0.4); tone(160, 0.08, "sine", 0.35, 0.12); },
-    fold() { noise(0.12, 0.15, 0, 1200); },
-    turn() { tone(880, 0.12, "sine", 0.25); tone(1320, 0.15, "sine", 0.2, 0.13); },
-    win() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.18, "triangle", 0.25, i * 0.1)); },
-    pot() { tone(1500, 0.08, "triangle", 0.15); tone(1900, 0.1, "triangle", 0.12, 0.08); },
+    bet(big) { slide(0.12, 0.12, 1800, 900); clatter(big ? 7 : 4, big ? 0.22 : 0.13, 0.55); },
+    call() { slide(0.1, 0.1, 1600, 900); clatter(3, 0.1, 0.5); },
+    raise() { slide(0.22, 0.2, 2600, 700); clatter(8, 0.26, 0.6, 1.05); chime([784, 1175], 0.16, 0.2); },
+    allin() { slide(0.35, 0.26, 2400, 500); clatter(14, 0.5, 0.6); tone(98, 0.35, "sine", 0.35, 0.05); chime([659, 988, 1319], 0.18, 0.3); },
+    gather() { slide(0.3, 0.14, 1400, 600); clatter(6, 0.3, 0.35, 0.95); },
+    collect() { slide(0.45, 0.18, 1200, 500); clatter(14, 0.7, 0.45, 0.95); },
+    deal() { slide(0.07, 0.2, 5000, 2500); slide(0.07, 0.18, 5000, 2500, 0.1); },
+    card() { slide(0.08, 0.2, 4500, 2200); },
+    chips() { clatter(4, 0.15, 0.5); },
+    check() { knock(0, 0.55); knock(0.13, 0.45); },
+    fold() { slide(0.2, 0.16, 3200, 700); },
+    turn() { chime([880, 1320], 0.2); },
+    win() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.2, "triangle", 0.22, i * 0.09)); },
+    pot() { clatter(3, 0.1, 0.4); },
     emoji() { tone(1000, 0.08, "sine", 0.15, 0, 1400); },
     tick() { tone(1400, 0.06, "square", 0.12); },
     alarm() { [0, 0.18, 0.36, 0.54].forEach((d, i) => tone(i % 2 ? 988 : 1319, 0.16, "square", 0.22, d)); },
@@ -121,7 +166,10 @@
       if (b[id] && b[id] !== a[id] && !played) {
         const l = b[id];
         if (l === "Pas") SND.fold(); else if (l === "Check") SND.check();
-        else if (l !== "SB" && l !== "BB") { const pl = cur.players.find(x => x.id === id); SND.bet(/All-in/.test(l) || (pl && pl.bet >= 5 * (cur.blinds ? cur.blinds.bb : 1))); }
+        else if (/^All-in/.test(l)) SND.allin();
+        else if (/^Raise/.test(l)) SND.raise();
+        else if (/^Call/.test(l)) SND.call();
+        else if (/^Bet/.test(l)) { const pl = cur.players.find(x => x.id === id); SND.bet(pl && pl.bet >= 5 * (cur.blinds ? cur.blinds.bb : 1)); }
         played = true;
       }
     }
@@ -190,8 +238,8 @@
     const isStandalone = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
     let h = "";
     if (isStandalone) h += `<p class="hint">✅ Folosești aplicația de pe ecranul principal.</p>`;
-    else if (installEvt) h += `<button class="btn primary" data-act="install">📲 Instalează aplicația pe ecranul principal</button><p class="hint">Apare iconița „Poker” lângă celelalte aplicații și intri direct la masa ta.</p>`;
-    else h += `<button class="btn primary" data-act="installHelp">📲 Pune aplicația pe ecranul principal</button><p class="hint">Iconița „Poker” te duce direct la masa ta, ca o aplicație.</p>`;
+    else if (installEvt) h += `<button class="btn primary" data-act="install">📲 Instalează aplicația pe ecranul principal</button><p class="hint">Apare iconița „POKER KY” lângă celelalte aplicații și intri direct la masa ta.</p>`;
+    else h += `<button class="btn primary" data-act="installHelp">📲 Pune aplicația pe ecranul principal</button><p class="hint">Iconița „POKER KY” te duce direct la masa ta, ca o aplicație.</p>`;
     h += `<button class="btn" data-act="reload">🔄 Actualizează (încarcă ultima versiune)</button>`;
     return h;
   }
@@ -206,11 +254,11 @@
       <ol class="steps"><li>Deschide linkul tău în <b>Safari</b> (nu din WhatsApp sau alt browser).</li>
       <li>Apasă <b>Partajează</b> – pătratul cu săgeata în sus, jos pe ecran.</li>
       <li>Derulează și alege <b>Adaugă pe ecranul principal</b>, apoi <b>Adaugă</b>.</li>
-      <li>De acum intri la masă din iconița <b>Poker</b>.</li></ol>` : `
+      <li>De acum intri la masă din iconița <b>POKER KY</b>.</li></ol>` : `
       <ol class="steps"><li>Deschide linkul tău în <b>Chrome</b>.</li>
       <li>Apasă cele <b>3 puncte</b> din dreapta sus.</li>
       <li>Alege <b>Adaugă pe ecranul de pornire</b> (sau <b>Instalează aplicația</b>), apoi <b>Adaugă</b>.</li>
-      <li>De acum intri la masă din iconița <b>Poker</b>.</li></ol>`}<button class="btn wide">Am înțeles</button></div>`;
+      <li>De acum intri la masă din iconița <b>POKER KY</b>.</li></ol>`}<button class="btn wide">Am înțeles</button></div>`;
     m.onclick = e => { if (e.target === m || e.target.closest("button")) m.remove(); };
     document.body.appendChild(m);
   }
@@ -301,7 +349,28 @@
       window.Official.open(p, { canWrite: !!p.canEdit, toast, save: data => post("official", { data }) });
     } catch (_) { toast("Punctajul oficial nu s-a putut încărca. Verifică internetul."); }
   }
-  // ---------- „Masa mea”: masa de antrenament cu boți ----------
+  // ---------- numele meselor și legătura cu meniul gazdei ----------
+  const roomTitle = () => !S ? "POKER KY" : S.practice ? "Poker Training" : S.mainRoom ? "POKER TOURNAMENT" : S.friendsRoom ? "Poker Friends" : "POKER KY";
+  function ctx() {
+    return { S: () => S, post, toast, esc, fmt, openOfficial, openDrawer, closeDrawer, goMyTable, goFriends, goMainTable, hardReload, showInstallHelp,
+      subscribePush, notifHtml, appHtml, origin: location.origin, screen: () => screen, inviteAction, eventAction, invitePanelHtml };
+  }
+  async function goFriends() { const r = await post("friendsEnter"); location.href = r.url; }
+  function navHtml() {
+    if (!S) return "";
+    let h = "";
+    if (S.admin) h += `<button class="btn primary wide" data-act="adminMenu">👑 Meniu gazdă${S.adminReqs ? ` <span class="badge">${S.adminReqs}</span>` : ""}</button>`;
+    if (!S.guest) h += `<button class="btn wide" data-act="official">📋 Punctaj oficial (POKER TOURNAMENT)</button>`;
+    if (S.friendsRoom) h += `<button class="btn wide" data-act="fscore">📊 Punctaj Poker Friends</button>`;
+    let row = "";
+    if (S.mainRoom && S.friendsAccess) row += `<button class="btn" data-act="goFriends" style="flex:1">🃏 Poker Friends</button>`;
+    if (S.friendsRoom && !S.guest) row += `<button class="btn" data-act="backMain" style="flex:1">⬅ POKER TOURNAMENT</button>`;
+    if (S.trainingAccess && !S.practice) row += `<button class="btn" data-act="myTable" style="flex:1">🎯 Poker Training</button>`;
+    if (row) h += `<div class="share">${row}</div>`;
+    if (S.otherRunning) h += `<p class="hint">ℹ️ La ${S.mainRoom ? "Poker Friends" : "POKER TOURNAMENT"} se joacă acum. Aici se poate porni un joc după ce se termină acolo.</p>`;
+    return h;
+  }
+  // ---------- „Poker Training”: masa de antrenament cu boți ----------
   async function goMyTable() {
     const r = await post("practice");
     store.set("poker:practiceLink", r.url); store.set("poker:" + r.code, r.token);
@@ -318,7 +387,8 @@
     if (a === "practiceClose") { if (confirmed("practiceClose", b, "Sigur? Apasă din nou")) { await post("abort"); if (drawer) closeDrawer(); } return true; }
     return false;
   }
-  const PRACTICE_INFO = "Joc simplu, fără punctaj. Fiecare începe cu 50.000 de fise, blind-uri și timp ca la masa mare. Dacă rămâi fără fise, reintri cu 50.000 de câte ori vrei.";
+  const PRACTICE_INFO_ = "Joc simplu, fără punctaj. Fiecare începe cu 50.000 de fise, blind-uri și timp ca la masa mare. Dacă rămâi fără fise, reintri cu 50.000 de câte ori vrei.";
+  const PRACTICE_INFO = PRACTICE_INFO_;
   window.addEventListener("beforeunload", e => { if (window.Official && window.Official.hasUnsaved()) { e.preventDefault(); e.returnValue = ""; } });
 
   // ---------- voce live (WebRTC): fiecare microfon pornit trimite sunetul direct celorlalți ----------
@@ -390,25 +460,48 @@
   document.addEventListener("pointerdown", () => { if (needTapAudio) { needTapAudio = false; Object.values(vIn).forEach(c => c.audio && c.audio.play().catch(() => {})); } });
   function applyVoiceVolume() { Object.values(vIn).forEach(c => { if (c.audio) { c.audio.volume = voiceVol; c.audio.muted = voiceMuted; } }); }
 
-  // ---------- fise ----------
-  const CHIP_DEN = [[100000, "c-purple"], [25000, "c-black"], [5000, "c-green"], [1000, "c-blue"], [500, "c-red"], [100, "c-white"]];
-  function chipStack(amount, max) {
-    let left = amount, discs = [];
-    for (const [v, c] of CHIP_DEN) { while (left >= v && discs.length < (max || 9)) { discs.push(c); left -= v; } }
-    if (!discs.length) discs.push("c-white");
-    return `<span class="chips">${discs.reverse().map((c, i) => `<i class="chip ${c}" style="--i:${i}"></i>`).join("")}</span>`;
+  // ---------- fise: 500 mov · 1.000 galben · 2.000 gri · 5.000 verde (ca fisele voastre reale) ----------
+  const CHIP_VALS = [5000, 2000, 1000, 500];
+  const CHIP_COL = {
+    500: { base: "#7a1d6c", edge: "#4f0f45", holo: "#ff4fc1", holo2: "#ffb3e6" },
+    1000: { base: "#e9c11b", edge: "#a88308", holo: "#ffd84a", holo2: "#fff3b0" },
+    2000: { base: "#8e949c", edge: "#5d636b", holo: "#d9dee5", holo2: "#ffffff" },
+    5000: { base: "#16803f", edge: "#0b4f25", holo: "#3dff8b", holo2: "#c9ffe0" },
+  };
+  function chipSvg(v, withLabel) {
+    const c = CHIP_COL[v], id = "g" + v + (withLabel ? "L" : "");
+    let rays = "";
+    for (let i = 0; i < 24; i++) { const a1 = i * 15 * Math.PI / 180, a2 = (i * 15 + 7) * Math.PI / 180; rays += `<path d="M50 50L${(50 + 34 * Math.cos(a1)).toFixed(1)} ${(50 + 34 * Math.sin(a1)).toFixed(1)}L${(50 + 34 * Math.cos(a2)).toFixed(1)} ${(50 + 34 * Math.sin(a2)).toFixed(1)}Z" fill="${i % 3 ? c.holo : c.holo2}" opacity="${i % 2 ? .12 : .25}"/>`; }
+    let ins = ""; for (let i = 0; i < 8; i++) ins += `<rect x="44" y="2" width="12" height="11" rx="1.5" fill="#f4f1ea" transform="rotate(${i * 45 + 22.5} 50 50)"/>`;
+    const label = withLabel ? `<text x="50" y="51" text-anchor="middle" dominant-baseline="central" font-family="Arial,sans-serif" font-weight="800" font-size="${String(v).length >= 4 ? 13 : 15}" fill="#fff" stroke="#000" stroke-width=".7" paint-order="stroke">${v}</text>` : `<text x="50" y="40" text-anchor="middle" dominant-baseline="central" font-size="16" fill="${c.holo2}">♠</text><text x="50" y="62" text-anchor="middle" dominant-baseline="central" font-size="16" fill="#e8323c">♥</text>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><defs><radialGradient id="${id}b" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="${c.base}"/><stop offset="1" stop-color="${c.edge}"/></radialGradient><radialGradient id="${id}h" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="${c.holo2}" stop-opacity=".9"/><stop offset=".4" stop-color="${c.holo}" stop-opacity=".75"/><stop offset="1" stop-color="#0d0d10"/></radialGradient><linearGradient id="${id}s" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity=".25"/></linearGradient></defs><circle cx="50" cy="50" r="48" fill="url(#${id}b)"/>${ins}<circle cx="50" cy="50" r="37.5" fill="#f4f1ea"/><circle cx="50" cy="50" r="35" fill="#0d0d10"/><circle cx="50" cy="50" r="34" fill="url(#${id}h)"/>${rays}<circle cx="50" cy="50" r="22" fill="#0d0d10" opacity=".35"/>${label}<circle cx="50" cy="50" r="48" fill="url(#${id}s)"/><circle cx="50" cy="50" r="47.6" fill="none" stroke="#000" stroke-opacity=".35" stroke-width=".8"/></svg>`;
   }
-  function potStacks(amount) {
-    // potul: 3 teancuri una lângă alta
-    const parts = [Math.ceil(amount * 0.45), Math.floor(amount * 0.35), amount - Math.ceil(amount * 0.45) - Math.floor(amount * 0.35)].filter(x => x > 0);
-    return `<span class="potstacks">${parts.map(x => chipStack(x, 8)).join("")}</span>`;
+  (() => {
+    let css = "";
+    CHIP_VALS.forEach(v => { css += `.pc.d${v}{background-image:url("data:image/svg+xml,${encodeURIComponent(chipSvg(v))}");--edge:${CHIP_COL[v].edge}}`; });
+    const st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
+  })();
+  window.PokerChipSvg = chipSvg;
+  function chipsFor(amount) {
+    let left = Math.max(0, Math.round(amount || 0)); const out = {};
+    CHIP_VALS.forEach(v => { const n = Math.floor(left / v); if (n) { out[v] = n; left -= n * v; } });
+    if (left > 0 || !Object.keys(out).length) out[500] = (out[500] || 0) + 1;
+    return out;
   }
+  // teancuri: fiecare valoare în teancul ei; sumele mari = mai multe teancuri (înălțime limitată)
+  function chipStack(amount, per, maxCols) {
+    per = per || 8; maxCols = maxCols || 3;
+    const cnt = chipsFor(amount), cols = [];
+    CHIP_VALS.forEach(v => { let n = cnt[v] || 0; while (n > 0 && cols.length < maxCols) { const k = Math.min(per, n); cols.push({ v, k }); n -= k; } });
+    return `<span class="cstk">${cols.map(c => `<span class="ccol" style="--n:${c.k}">${Array.from({ length: c.k }, (_, i) => `<i class="pc d${c.v}" style="--i:${i}"></i>`).join("")}</span>`).join("")}</span>`;
+  }
+  function potStacks(amount) { return `<span class="potstacks">${chipStack(amount, 10, 5)}</span>`; }
   let seatPos = {}; // id -> {x,y,bx,by} (procente din masă), pentru animații
   function flyChips(from, to, n, delay) {
     const ta = document.getElementById("tablearea"); if (!ta) return;
     for (let i = 0; i < n; i++) {
       const el = document.createElement("i");
-      el.className = "chip fly " + CHIP_DEN[(i + 2) % 5][1];
+      el.className = "pc fly d" + CHIP_VALS[i % 4];
       el.style.left = from.x + "%"; el.style.top = from.y + "%";
       ta.appendChild(el);
       const d = (delay || 0) + i * 40;
@@ -430,8 +523,11 @@
   // ---------- conexiune ----------
   function connect() {
     if (es) es.close();
-    es = new EventSource(`/api/stream?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}`);
+    es = new EventSource(`/api/stream?code=${encodeURIComponent(code)}&token=${encodeURIComponent(token)}&dev=${encodeURIComponent(DEV)}`);
     es.addEventListener("official", ev => { try { window.Official && window.Official.update(JSON.parse(ev.data)); } catch (_) {} });
+    es.addEventListener("blocked", ev => { let msg = ""; try { msg = JSON.parse(ev.data).msg; } catch (_) {} blockedOut(msg); });
+    es.addEventListener("admin", () => { if (S && S.admin && window.PokerAdmin) window.PokerAdmin.refresh(); });
+    es.addEventListener("fscore", ev => { try { window.PokerAdmin && window.PokerAdmin.fscoreUpdate(JSON.parse(ev.data)); } catch (_) {} });
     es.addEventListener("rtc", ev => { try { const m = JSON.parse(ev.data); onRtc(m.from, m.data); } catch (_) {} });
     es.onmessage = ev => {
       try {
@@ -449,9 +545,38 @@
         try {
           const r = await post("join", { code, token });
           if (r && r.token) { token = r.token; return connect(); }
-        } catch (_) { return lost(); }
+        } catch (err) { return joinFailed(err); }
       }
     };
+  }
+  // linkul nu mai merge (blocat / șters) sau telefonul așteaptă aprobarea gazdei
+  function joinFailed(err) {
+    const d = (err && err.data) || {};
+    if (d.needApproval) return waitApproval();
+    if (d.blocked) return blockedOut(err.message);
+    return lost();
+  }
+  function blockedOut(msg) {
+    if (voiceOn) micOff();
+    if (es) { es.close(); es = null; }
+    if (drawer) closeDrawer(true);
+    S = null; screen = "home";
+    $app.onclick = null;
+    $app.innerHTML = `<div class="wrap"><div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>POKER KY</h1></div>
+      <section class="panel"><h2>🔒 Fără acces</h2><p>${esc(msg || "Accesul tău a fost oprit de gazdă.")}</p><p class="hint">Dacă e o greșeală, scrie-i organizatorului. Când îți redă accesul, deschide din nou linkul tău.</p></section></div>`;
+  }
+  let approvalTimer = null;
+  function waitApproval() {
+    if (es) { es.close(); es = null; }
+    screen = "wait";
+    $app.onclick = null;
+    $app.innerHTML = `<div class="wrap"><div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>Poker Friends</h1></div>
+      <section class="panel"><h2>⏳ Așteaptă aprobarea</h2><p>Am trimis gazdei cererea ta. Imediat ce o acceptă, intri automat la masă.</p><p class="hint">Lasă pagina deschisă. Linkul tău merge doar pe telefonul aprobat de gazdă.</p></section></div>`;
+    clearTimeout(approvalTimer);
+    approvalTimer = setTimeout(async () => {
+      try { const r = await post("join", { code, token }); enter(r.code, r.token); }
+      catch (err) { const d = (err && err.data) || {}; if (d.needApproval) waitApproval(); else if (d.blocked) blockedOut(err.message); else waitApproval(); }
+    }, 5000);
   }
   function lost(msg) {
     if (voiceOn) micOff();
@@ -476,11 +601,15 @@
     screen = "home";
     const name = store.get("poker:name") || "";
     $app.onclick = null; $app.oninput = null; $app.onchange = null;
+    const ll = store.get("poker:lastLink"), mainL = ll && !ll.startsWith("/masa/FRIENDS/") ? ll : null, frL = store.get("poker:friendsLink"), prL = store.get("poker:practiceLink");
     $app.innerHTML = `<div class="wrap">
-      <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>Poker între prieteni</h1><p>Texas Hold'em pe fise, la masa voastră privată.</p></div>
+      <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>POKER KY</h1><p>Texas Hold'em pe fise, la masa voastră privată.</p></div>
       ${error ? `<p class="err">${esc(error)}</p>` : ""}
-      <button class="btn primary wide" id="homeOfficial" style="margin-bottom:10px">📋 Punctaj oficial (turneul live)</button>
-      ${store.get("poker:lastLink") || store.get("poker:practiceLink") ? `<div class="share" style="margin-bottom:12px">${store.get("poker:lastLink") ? `<a class="btn" style="flex:1" href="${esc(store.get("poker:lastLink"))}">♠ Masa noastră</a>` : ""}${store.get("poker:practiceLink") ? `<a class="btn" style="flex:1" href="${esc(store.get("poker:practiceLink"))}">🎯 Masa mea</a>` : ""}</div>` : ""}
+      ${mainL || frL || prL ? `<div class="share">${mainL ? `<a class="btn primary" style="flex:1" href="${esc(mainL)}">♠ POKER TOURNAMENT</a>` : ""}${frL ? `<a class="btn" style="flex:1" href="${esc(frL)}">🃏 Poker Friends</a>` : ""}${prL ? `<a class="btn" style="flex:1" href="${esc(prL)}">🎯 Poker Training</a>` : ""}</div>` : ""}
+      <button class="btn wide" id="homeOfficial">📋 Punctaj oficial (POKER TOURNAMENT)</button>
+      <section class="panel"><h2>🔑 Nu mai găsești linkul?</h2><p class="hint">Dacă ești în grupul POKER TOURNAMENT și ai pierdut linkul (sau ai șters datele browserului), cere acces gazdei. Când acceptă, intri imediat.</p>
+        <button class="btn primary" id="homeAccess">🔑 Cere acces gazdei</button></section>
+      <details class="panel morebox"><summary>Alte mese (cu cod)</summary>
       <div class="grid2">
         <form class="panel" id="joinForm"><h2>Intră la o masă</h2>
           <label class="f">Codul mesei<input class="t code" id="jCode" maxlength="8" autocomplete="off" value="${esc(urlCode || "")}" placeholder="ex. K7M2Q" required></label>
@@ -490,9 +619,10 @@
           <p class="hint">Devii gazda: alegi setările, pornești jocul și trimiți linkul celorlalți.</p>
           <label class="f">Numele tău<input class="t" id="cName" maxlength="18" value="${esc(name)}" required></label>
           <button class="btn wide">Creează masa</button></form>
-      </div><div class="share" style="justify-content:center"><button class="btn small" id="homeReload">🔄 Actualizează</button></div></div>`;
+      </div></details><div class="share" style="justify-content:center"><button class="btn small" id="homeReload">🔄 Actualizează</button></div></div>`;
     document.getElementById("homeReload").onclick = hardReload;
     document.getElementById("homeOfficial").onclick = openOfficial;
+    document.getElementById("homeAccess").onclick = () => window.PokerAdmin.askAccess({ toast });
     document.getElementById("joinForm").onsubmit = async e => {
       e.preventDefault(); audio();
       const c = document.getElementById("jCode").value.trim().toUpperCase(), n = document.getElementById("jName").value.trim();
@@ -590,25 +720,26 @@
     raiseOpen = false; emojiOpen = false;
     if (S.practice) {
       $app.innerHTML = `<div class="wrap">
-        <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>🎯 Masa mea</h1><p>Masa ta de antrenament: joci singur cu boții, oricând.</p></div>
+        <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>🎯 Poker Training</h1><p>Masa ta de antrenament: joci singur cu boții, oricând.</p></div>
         <section class="panel"><h2>La masă <span class="aside" id="pcount"></span></h2><div class="plist" id="plist"></div><div id="botArea"></div></section>
         <div id="results"></div>
         <div id="startArea"></div>
         <section class="panel"><h2>Reguli fixe</h2><p class="hint">${PRACTICE_INFO}</p></section>
-        <div class="share"><button class="btn" data-act="official" style="flex:1">📋 Punctaj oficial</button><button class="btn" data-act="backMain" style="flex:1">⬅ Înapoi la masa noastră</button></div>
+        <div class="share"><button class="btn" data-act="official" style="flex:1">📋 Punctaj oficial</button><button class="btn" data-act="backMain" style="flex:1">⬅ POKER TOURNAMENT</button></div>
         <div class="share"><button class="btn small" data-act="drawer" style="flex:1">🔊 Sunet și setări</button></div>
       </div>`;
       $app.onclick = lobbyClick; $app.oninput = null; $app.onchange = null; $app.onsubmit = null;
       return;
     }
     draft = JSON.parse(JSON.stringify(S.settings)); draftDirty = false;
+    const named = S.mainRoom || S.friendsRoom;
     $app.innerHTML = `<div class="wrap">
-      <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>Poker între prieteni</h1></div>
-      <button class="btn primary wide" data-act="official">📋 Punctaj oficial (turneul live)</button>
-      <button class="btn wide" data-act="myTable" style="margin-top:8px">🎯 Masa mea (antrenament cu boți)</button>
-      <section class="panel"><h2>Masa <span class="bigcode">${esc(S.code)}</span></h2>
+      <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>${esc(roomTitle())}</h1>${named ? `<p>POKER KY</p>` : ""}</div>
+      <div id="adminAlerts"></div>
+      <div id="navArea" class="navarea"></div>
+      ${named ? "" : `<section class="panel"><h2>Masa <span class="bigcode">${esc(S.code)}</span></h2>
         <div class="share"><div class="link" id="shareLink">${esc(location.origin + "/masa/" + S.code)}</div><button class="btn" data-act="copy">Copiază linkul</button></div>
-        <p class="hint">Trimite linkul prietenilor. Ei își scriu doar numele și intră, fără cont.</p></section>
+        <p class="hint">Trimite linkul prietenilor. Ei își scriu doar numele și intră, fără cont.</p></section>`}
       <section class="panel"><h2>Ce jucăm</h2><div id="eventArea"></div></section>
       <div id="invArea"></div>
       <div id="results"></div>
@@ -651,8 +782,10 @@
       h += `<div class="pl"><span class="dot ${p.connected ? "on" : ""}"></span><span class="nm">${esc(p.name)}${p.me ? " (tu, gazda)" : ""}</span>
         <button class="btn small" data-act="copyLink" data-l="${esc(l)}">Copiază</button>${p.me ? "" : `<a class="btn small" href="https://wa.me/?text=${msg}" target="_blank" rel="noopener">WhatsApp</a>`}</div>`;
     });
-    h += `<form class="share" id="addForm"><input class="t" id="addName" maxlength="18" placeholder="Numele jucătorului nou" style="flex:1;min-width:0"><button class="btn">Adaugă</button></form>
-      ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Copiază de lângă numele tău): cu el intri oricând ca gazdă, de pe orice telefon.</p>` : ""}</section>`;
+    h += S.mainRoom || S.friendsRoom ? (S.admin ? `<button class="btn" data-act="adminMenu">👑 Adaugă sau elimină jucători (Meniu gazdă)</button>` : "")
+      : `<form class="share" id="addForm"><input class="t" id="addName" maxlength="18" placeholder="Numele jucătorului nou" style="flex:1;min-width:0"><button class="btn">Adaugă</button></form>`;
+    h += `
+${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Copiază de lângă numele tău): cu el intri oricând ca gazdă, de pe orice telefon.</p>` : ""}</section>`;
     return h;
   }
   function lastGame() {
@@ -732,6 +865,8 @@
       patch("startArea", `<button class="btn primary wide" data-act="practiceStart">▶ ${S.event ? "Joc nou" : "Începe jocul"}</button>`);
       return;
     }
+    patch("navArea", navHtml());
+    patch("adminAlerts", window.PokerAdmin.alertsHtml(ctx()));
     patch("eventArea", eventHtml());
     patch("invArea", invitePanelHtml());
     patch("inviteArea", inviteHtml());
@@ -839,6 +974,7 @@
       if (await eventAction(a, b)) return;
       if (await practiceAction(a, b)) return;
       if (await inviteAction(a, b)) return;
+      if (await adminActions(a, b)) return;
       if (a === "copy") copy(location.origin + "/masa/" + S.code);
       else if (a === "score") openDrawer("score");
       else if (a === "official") openOfficial();
@@ -860,6 +996,13 @@
       else if (a === "makehost") await post("makehost", { playerId: b.dataset.id });
       else if (a === "leave") { if (confirmed("leave", b, "Sigur? Apasă din nou")) await leave(); }
     } catch (err) { toast(err.message); }
+  }
+  async function adminActions(a, b) {
+    if (a === "adminMenu") { window.PokerAdmin.openMenu(ctx()); return true; }
+    if (a === "fscore") { window.PokerAdmin.openFScore(ctx()); return true; }
+    if (a === "goFriends") { await goFriends(); return true; }
+    if (a.startsWith("adm:")) { await window.PokerAdmin.action(ctx(), a.slice(4), b); return true; }
+    return false;
   }
   async function eventAction(a, b, startNow) {
     if (a === "chooser") { chooserOpen = true; patch("eventArea", eventHtml()); return true; }
@@ -905,9 +1048,9 @@
     $app.onclick = tableClick; $app.oninput = tableInput; $app.onchange = null;
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
-        <button class="iconbtn" data-act="official" aria-label="Punctaj oficial">📋</button><button class="iconbtn" data-act="score" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
+        ${S.guest ? "" : `<button class="iconbtn" data-act="official" aria-label="Punctaj oficial">📋</button>`}<button class="iconbtn" data-act="${S.friendsRoom ? "fscore" : "score"}" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
       <div id="reqArea" class="reqarea"></div>
-      <div class="tablearea" id="tablearea"><div class="felt" id="felt"></div><div id="seats"></div><div class="center" id="center"></div><div id="winArea"></div></div>
+      <div class="tablearea" id="tablearea"><div class="felt" id="felt"><div class="rail"></div><div class="wood"></div><div class="cloth"></div></div><div id="seats"></div><div class="center" id="center"></div><div id="winArea"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
   }
   // Pe telefon: locuri fixe în jurul mesei, alese după numărul de jucători, care lasă liberă
@@ -937,6 +1080,12 @@
     }
     return pos;
   }
+  // jetoanele D / SB / BB: lipite de plăcuța jucătorului, pe partea dinspre mijlocul mesei
+  function tokHtml(p, q) {
+    const t = []; if (p.dealer) t.push("D"); if (p.sb) t.push("SB"); if (p.bb) t.push("BB");
+    if (!t.length) return "";
+    return `<span class="toks ${q.x > 55 ? "tl" : "tr"}">${t.map(x => `<span class="btok t-${x.toLowerCase()}">${x}</span>`).join("")}</span>`;
+  }
   function updateTable() {
     const h = S.hand;
     const me = S.players.find(p => p.me);
@@ -946,8 +1095,8 @@
     patch("tbBlinds", S.blinds ? `${fmt(S.blinds.sb)}/${fmt(S.blinds.bb)}${S.ante ? ` <small>ante ${fmt(S.ante)}</small>` : ""}` : "");
     patch("tbMeta", `${S.event && S.event.type === "turneu" ? `Turneu · jocul ${S.gameNo}/${S.event.totalGames}` : "Joc simplu"} · Nivelul ${S.level} · ${S.aliveCount} în joc${S.rebuyOpen ? " · reintrare deschisă" : ""}`);
     patch("tbClock", clockText(0));
-    patch("reqArea", pendingHtml());
-    patch("hostBtn", S.isHost ? `<button class="iconbtn hostmenu" data-act="hostmenu" aria-label="Meniul gazdei">☰</button>` : "");
+    patch("reqArea", window.PokerAdmin.alertsHtml(ctx(), true) + pendingHtml());
+    patch("hostBtn", S.admin ? `<button class="iconbtn hostmenu" data-act="adminMenu" aria-label="Meniu gazdă">👑${S.adminReqs ? `<span class="badge">${S.adminReqs}</span>` : ""}</button>` : S.isHost ? `<button class="iconbtn hostmenu" data-act="hostmenu" aria-label="Meniul gazdei">☰</button>` : "");
     const unread = Math.max(0, S.chat.length - seenChat);
     patch("chatBadge", unread && !(drawer && drawerTab === "chat") ? `<span class="badge">${unread}</span>` : "");
     // locuri: eu jos, ceilalți în jurul mesei
@@ -958,17 +1107,17 @@
     let seats = "";
     rot.forEach((p, i) => {
       const q = pos[i];
-      const cls = ["seat", p.talking ? "talking" : "", (p.sitOut || p.spectator) && !p.inHand ? "away" : "", p.me ? "me" : "", p.toAct ? "turn" : "", p.folded ? "folded" : "", p.out ? "out" : "", p.winner ? "win" : "", !p.connected ? "off" : "", p.waiting ? "waiting" : "", p.usingBank ? "bank" : ""].join(" ");
+      const cls = ["seat", p.talking ? "talking" : "", (p.sitOut || p.spectator) && !p.inHand ? "away" : "", p.me ? "me" : "", p.toAct ? "turn" : "", p.folded ? "folded" : "", p.out ? "out" : "", p.winner ? "win" : "", !p.connected ? "off" : "", p.waiting ? "waiting" : "", p.usingBank ? "bank" : "", p.absent && !p.bot ? "absent" : ""].join(" ");
       let cards = "";
       if (!p.me && p.cards && h) cards = `<div class="cards">${p.cards.map((c, j) => card(c, "sm", winCards, `${h.id}-${p.id}-${j}-${c === "??" ? "b" : "f"}`)).join("")}</div>`;
       const timer = p.toAct && h ? `<div class="timer"><i class="${h.turnLeftMs < 6000 ? "low" : ""}" style="width:${Math.round(100 * h.turnLeftMs / h.turnTotalMs)}%"></i></div>` : "";
       const label = p.spectator ? "Nu joacă" : p.out ? `Locul ${p.place || "–"}` : p.leaving ? "Pleacă" : p.waiting ? "Intră" : (p.usingBank ? "Timp extra" : (p.allin ? "All-in" : (p.last || (p.sitOut ? "Deoparte" : (p.sitOutOnce ? "Pauză o mână" : null)))));
       const emo = p.emoji ? `<span class="emo" data-until="${Date.now() + p.emoji.leftMs}">${esc(p.emoji.e)}</span>` : "";
       const bub = p.bubble ? `<span class="bubble" data-until="${Date.now() + p.bubble.leftMs}">${esc(p.bubble.m)}</span>` : "";
-      seats += `<div class="${cls}" data-act="profile" data-id="${p.id}" style="left:${q.x}%;top:${q.y}%">${bub}${emo}${cards}${avatar(p, "seatav")}<div class="box">${label ? `<span class="act">${esc(label)}</span>` : ""}${p.dealer ? '<span class="dealer">D</span>' : ""}
-        <div class="nm">${esc(p.name)}</div><div class="ch num">${p.out ? "eliminat" : "● " + fmt(p.chips)}</div>${timer}</div></div>`;
+      seats += `<div class="${cls}" data-act="profile" data-id="${p.id}" style="left:${q.x}%;top:${q.y}%">${bub}${emo}${cards}${avatar(p, "seatav")}<div class="box">${label ? `<span class="act">${esc(label)}</span>` : ""}
+        ${tokHtml(p, q)}<div class="nm">${esc(p.name)}</div><div class="ch num">${p.out ? "eliminat" : "● " + fmt(p.chips)}</div>${timer}</div></div>`;
       seatPos[p.id] = q;
-      if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${chipStack(p.bet, 7)}<span class="amt">${fmt(p.bet)}</span></div>`;
+      if (p.bet > 0 && h && !h.done) seats += `<div class="betchip num" style="left:${q.bx}%;top:${q.by}%">${chipStack(p.bet, 6, 3)}<span class="amt">${fmt(p.bet)}</span></div>`;
     });
     patch("seats", seats);
     const seatsEl = document.getElementById("seats"); if (seatsEl) seatsEl.classList.toggle("crowd", rot.length >= 6);
@@ -1012,9 +1161,9 @@
     if (a) {
       if (raiseOpen && a.canRaise) {
         if (raiseVal < a.minTo || raiseVal > a.maxTo) raiseVal = a.minTo;
-        // butoane rapide: mereu 2×, 3×, 4× BB (suma totală a pariului). Dacă pe masă e deja un pariu mai mare, butonul e inactiv.
+        // butoane rapide: mereu 2×, 4×, 6×, 8× BB (suma totală a pariului). Dacă pe masă e deja un pariu mai mare, butonul e inactiv.
         const bb = S.blinds.bb;
-        const presets = [["Min", a.minTo, true]].concat([2, 3, 4].map(k => { const v = Math.min(a.maxTo, k * bb); return [`${k}×BB`, v, v >= a.minTo]; }));
+        const presets = [["Min", a.minTo, true]].concat([2, 4, 6, 8].map(k => { const v = Math.min(a.maxTo, k * bb); return [`${k}×BB`, v, v >= a.minTo]; }));
         mb += `<div class="raisebox"><div class="row"><input type="range" id="rRange" min="${a.minTo}" max="${a.maxTo}" step="${Math.max(1, S.blinds.sb)}" value="${raiseVal}"><input class="amt num" id="rAmt" type="number" inputmode="numeric" value="${raiseVal}"></div>
           <div class="presets">${presets.map(([l, v, ok]) => `<button class="btn small" data-act="preset" data-v="${v}" ${ok ? "" : "disabled"}>${l}<br><span class="pv">${fmt(v)}</span></button>`).join("")}<button class="btn small allin" data-act="preset" data-v="${a.maxTo}">All-in<br><span class="pv">${fmt(a.maxTo)}</span></button></div>
           <div class="acts" style="grid-template-columns:1fr 2fr auto"><button class="btn" data-act="raiseCancel">Înapoi</button><button class="btn raise" data-act="raiseGo" id="rGo">${a.isBet ? "Bet" : "Raise"} ${fmt(raiseVal)}</button>${micBtn()}</div></div>`;
@@ -1074,6 +1223,7 @@
       if (a === "official") return openOfficial();
       if (await practiceAction(a, b)) return;
       if (await inviteAction(a, b)) return;
+      if (await adminActions(a, b)) return;
       if (a === "sound") return openDrawer("me");
       if (a === "hostmenu") return openDrawer("host");
       if (a === "mic") return micToggle();
@@ -1175,7 +1325,7 @@
     try {
       if (await settingsAction(a, b)) return;
       if (a === "mute") { muted = !muted; store.set("poker:mute", muted ? "1" : "0"); audio(); if (!muted) SND.chips(); const sb = document.querySelector('[data-act="sound"]'); if (sb) sb.textContent = muted ? "🔇" : "🔊"; return updateDrawer(true); }
-      if (a === "testSound") { audio(); SND.bet(true); return setTimeout(() => SND.win(), 400); }
+      if (a === "testSound") { audio(); SND.bet(true); setTimeout(() => SND.check(), 700); setTimeout(() => SND.raise(), 1300); setTimeout(() => SND.fold(), 2200); return setTimeout(() => SND.collect(), 2800); }
       if (a === "vmute") { voiceMuted = !voiceMuted; store.set("poker:vmute", voiceMuted ? "1" : "0"); applyVoiceVolume(); return updateDrawer(true); }
       if (a === "avatar") return pickAvatar();
       if (a === "enablePush") { await subscribePush(true); return updateDrawer(true); }
@@ -1188,6 +1338,7 @@
       if (await eventAction(a, b)) return;
       if (await practiceAction(a, b)) return;
       if (await inviteAction(a, b)) return;
+      if (await adminActions(a, b)) { if (a === "adminMenu" || a === "fscore") closeDrawer(); return; }
       if (a === "official") return openOfficial();
       if (a === "leave") { if (confirmed("leave", b)) await leave(); return; }
       if (a === "pause") return await post("pause");
@@ -1238,9 +1389,11 @@
         <h3 class="sub">Aplicația</h3>${appHtml()}
         <h3 class="sub">Poza ta</h3><div class="share">${avatar(S.players.find(p => p.me), "lg")}<button class="btn" data-act="avatar">Alege o poză</button></div>
         <h3 class="sub">Joc</h3><div class="share">${(() => { const me = S.players.find(p => p.me); return me.sitOut || me.spectator ? `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>` : `<button class="btn" data-act="sitHand">Stau o mână</button><button class="btn" data-act="sitOut">Stau deoparte</button>`; })()}</div>
-        <h3 class="sub">Punctaj oficial</h3><button class="btn" data-act="official">📋 Deschide punctajul oficial</button>
-        ${S.practice ? `<h3 class="sub">Masa mea</h3><p class="hint">${PRACTICE_INFO}</p><button class="btn" data-act="backMain">⬅ Înapoi la masa noastră</button></div>` : `<h3 class="sub">Masa mea</h3><p class="hint">Masa ta de antrenament: joci singur cu până la 7 boți, oricând.</p><button class="btn" data-act="myTable">🎯 Masa mea (antrenament cu boți)</button>
-        <h3 class="sub">Masa</h3><p class="hint">Codul mesei: <b>${esc(S.code)}</b>. Cu linkul tău personal revii oricând la locul tău.</p>
+        ${S.guest ? "" : `<h3 class="sub">Punctaj oficial</h3><button class="btn" data-act="official">📋 Deschide punctajul oficial</button>`}
+        ${S.friendsRoom ? `<h3 class="sub">Poker Friends</h3><button class="btn" data-act="fscore">📊 Punctaj Poker Friends</button>${S.guest ? "" : `<button class="btn" data-act="backMain">⬅ POKER TOURNAMENT</button>`}` : ""}
+        ${S.mainRoom && S.friendsAccess ? `<h3 class="sub">Poker Friends</h3><button class="btn" data-act="goFriends">🃏 Mergi la Poker Friends</button>` : ""}
+        ${S.practice ? `<h3 class="sub">Poker Training</h3><p class="hint">${PRACTICE_INFO}</p><button class="btn" data-act="backMain">⬅ POKER TOURNAMENT</button></div>` : `${S.trainingAccess ? `<h3 class="sub">Poker Training</h3><p class="hint">Masa ta de antrenament: joci singur cu până la 7 boți, oricând.</p><button class="btn" data-act="myTable">🎯 Poker Training (antrenament cu boți)</button>` : ""}
+        <h3 class="sub">Masa</h3><p class="hint">${esc(roomTitle())}. Cu linkul tău personal revii oricând la locul tău.</p>
         <button class="btn" data-act="leave" data-label="Ieși de la masă">Ieși de la masă</button>
         <p class="hint">Dacă ieși în timpul unei mâini, cărțile tale se aruncă și pleci când se termină mâna.</p></div>`}`;
     } else if (drawerTab === "host" && S.practice) {
@@ -1253,9 +1406,10 @@
         <div class="share"><button class="btn small" data-act="addbot" ${bots >= 7 ? "disabled" : ""}>+ Adaugă un bot</button>${bots ? `<button class="btn small" data-act="removebots">Scoate boții</button>` : ""}</div>
         <p class="hint">Un bot nou intră de la mâna următoare.</p>
         <h3 class="sub">Reguli fixe</h3><p class="hint">${PRACTICE_INFO}</p>
-        <button class="btn" data-act="backMain">⬅ Înapoi la masa noastră</button></div>`;
+        <button class="btn" data-act="backMain">⬅ POKER TOURNAMENT</button></div>`;
     } else if (drawerTab === "host") {
       html = `<div class="hostbox">
+        ${S.admin ? `<button class="btn primary" data-act="adminMenu">👑 Meniu gazdă complet</button>` : ""}
         <div class="share"><button class="btn" data-act="pause">${S.paused ? "▶ Continuă jocul" : "⏸ Pune pauză"}</button></div>
         <div class="share"><button class="btn" data-act="stop" data-label="Încheie jocul acum">Încheie jocul acum</button><button class="btn red" data-act="restart" data-label="Reîncepe de la zero">Reîncepe de la zero</button></div>
         <button class="btn" data-act="abort" data-label="Oprește și mergi la meniul inițial">Oprește și mergi la meniul inițial</button>
@@ -1315,11 +1469,18 @@
   // ---------- pornire ----------
   if (urlCode && store.get("poker:" + urlCode)) {
     code = urlCode;
-    post("join", { code: urlCode, token: store.get("poker:" + urlCode) })
+    token = store.get("poker:" + urlCode);
+    post("join", { code: urlCode, token })
       .then(r => enter(r.code, r.token))
-      .catch(() => { store.del("poker:" + urlCode); code = null; renderHome(); });
+      .catch(err => {
+        const d = (err && err.data) || {};
+        if (d.needApproval) return waitApproval();
+        if (d.blocked) return blockedOut(err.message);
+        store.del("poker:" + urlCode); code = null; token = null; renderHome(err && err.message);
+      });
   } else {
     renderHome();
     if (location.pathname === "/punctaj") openOfficial();
+    if (location.pathname === "/acces") window.PokerAdmin.askAccess({ toast });
   }
 })();

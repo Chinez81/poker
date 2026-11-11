@@ -357,7 +357,7 @@ class Room {
     this.gameNo = this.event.games.length + 1;
     this.players.forEach(p => {
       p.spectator = !ps.includes(p); p.sitOutOnce = false;
-      p.chips = p.spectator ? 0 : this.settings.stack; p.out = false; p.waiting = false; p.place = null; p.timeouts = 0; p.rebuys = 0; p.bank = this.settings.timeBankSec * 1000; p.played = !p.spectator;
+      p.chips = p.spectator ? 0 : this.settings.stack; p.out = false; p.waiting = false; p.place = null; p.timeouts = 0; p.absentHands = 0; p.rebuys = 0; p.bank = this.settings.timeBankSec * 1000; p.played = !p.spectator;
     });
     this.started = true; this.finished = false; this.paused = false; this.onBreak = false;
     this.level = 0; this.bustOrder = [];
@@ -497,7 +497,7 @@ class Room {
     if (token) { const p = this.byToken(token); if (p && !p.bot) try { this.notify(p, "turn"); } catch (_) {} }
   }
 
-  act(token, type, amount, now) {
+  act(token, type, amount, now, auto) {
     const h = this.hand;
     if (type === "show") return this.show(token);
     if (!this.started || this.finished || !h || h.done) throw new Error("Nu este nicio mână în desfășurare.");
@@ -545,7 +545,8 @@ class Room {
       default: throw new Error("Acțiune necunoscută.");
     }
     h.acted.add(token);
-    p.timeouts = 0;
+    if (auto) { h.autoActed = h.autoActed || new Set(); h.autoActed.add(token); }
+    else { p.timeouts = 0; h.manual = h.manual || new Set(); h.manual.add(token); p.absentHands = 0; }
     this.addLog(`${p.name}: ${h.last[token]}`);
     this.progress(now);
   }
@@ -662,13 +663,24 @@ class Room {
       players: h.seats.map(t => { const p = this.byToken(t); return p ? { name: p.name, cards: h.reveal[t] || null, folded: h.folded.has(t), won: won[t] || 0, put: h.contrib[t] } : null; }).filter(Boolean),
     });
     if (this.handLog.length > 40) this.handLog.shift();
+    // absenți: cine n-a acționat singur (i s-a dat automat check/fold) adună o mână de absență
+    h.seats.forEach(t => {
+      const p = this.byToken(t); if (!p || p.bot) return;
+      if (h.manual && h.manual.has(t)) p.absentHands = 0;
+      else if (h.autoActed && h.autoActed.has(t)) p.absentHands = (p.absentHands || 0) + 1;
+    });
     // eliminări
     const busted = h.seats.map(t => this.byToken(t)).filter(p => p && p.chips === 0 && !p.out && !p.leaving);
+    let absentOut = [];
     if (busted.length) {
       busted.sort((a, b) => a.startChips - b.startChips); // cine avea mai puține fise iese „primul”
-      const remaining = this.alive().filter(p => p.chips > 0).length;
+      // cine lipsește de cel puțin 3 mâini iese odată cu jucătorul eliminat și ia locul mai slab
+      absentOut = this.alive().filter(p => p.chips > 0 && !p.bot && (p.absentHands || 0) >= 3 && !busted.includes(p));
+      const remaining = this.alive().filter(p => p.chips > 0 && !absentOut.includes(p)).length;
+      absentOut.forEach(p => { p.chips = 0; p.out = true; this.bustOrder.push(p.token); });
       busted.forEach(p => { p.out = true; this.bustOrder.push(p.token); });
       busted.slice().reverse().forEach((p, i) => { p.place = remaining + i + 1; this.addLog(`${p.name} a fost eliminat pe locul ${p.place}.`); });
+      absentOut.slice().reverse().forEach((p, i) => { p.place = remaining + busted.length + i + 1; this.addLog(`${p.name} lipsește de ${p.absentHands} mâini: iese odată cu ${busted[0].name}, pe locul ${p.place}.`); });
     }
     if (this.contenders() < 2) {
       this.nextHandAt = 0;
@@ -676,7 +688,7 @@ class Room {
     }
     // blind-urile cresc imediat cu un nivel pentru fiecare jucător eliminat; nivelul nou are din nou timpul întreg
     if (busted.length && this.settings.bustLevelUp) {
-      busted.forEach(p => { this.addLog(`${p.name} a ieșit: blind-urile urcă un nivel.`); this.nextLevel(now); });
+      busted.concat(absentOut).forEach(p => { this.addLog(`${p.name} a ieșit: blind-urile urcă un nivel.`); this.nextLevel(now); });
       this.levelEndsAt = now + this.settings.levelMin * 60000;
     }
     this.nextHandAt = now + this.settings.nextHandSec * 1000;
@@ -767,16 +779,14 @@ class Room {
     }
     if (h && !h.done && h.toAct) {
       const p = this.byToken(h.toAct);
-      const offline = p && p.conns === 0 && !p.push; // cine are notificări primește tot timpul de gândire
-      const limit = offline ? Math.min(h.deadline, h.turnStart + 4000) : h.deadline;
+      const limit = h.deadline; // și cine nu e conectat are tot timpul de gândire
       if (!h.warned && h.deadline - now <= 10000 && now < limit && p && !p.bot) { h.warned = true; try { this.notify(p, "10s"); } catch (_) {} }
       if (now >= limit) {
         {
           const owe = h.currentBet - h.bet[h.toAct];
           p.timeouts++;
           this.addLog(`${p.name} nu a acționat la timp.`);
-          if (offline && !p.sitOut) { p.sitOut = true; p.autoSit = true; this.addLog(`${p.name} nu e conectat: stă deoparte până revine.`); }
-          this.act(h.toAct, owe > 0 ? "fold" : "check", 0, now); // timp expirat: check dacă nu ai de plătit, altfel fold
+          this.act(h.toAct, owe > 0 ? "fold" : "check", 0, now, true); // timp expirat: check dacă nu ai de plătit, altfel fold
           changed = true;
         }
       }
@@ -813,6 +823,7 @@ class Room {
         emoji: p.emoji && now - p.emoji.t < 4000 ? { e: p.emoji.e, leftMs: 4000 - (now - p.emoji.t) } : null,
         bubble: p.lastChat && now - p.lastChat.t < 6000 ? { m: p.lastChat.m, leftMs: 6000 - (now - p.lastChat.t) } : null,
         avatarV: p.avatar ? p.avatarV : 0,
+        absent: (p.absentHands || 0) >= 1 && !p.bot, absentHands: p.absentHands || 0,
         sitOut: p.sitOut, sitOutOnce: p.sitOutOnce, spectator: p.spectator, seen: p.seen, bot: !!p.bot, pending: !!p.pending, talking: !!(p.talking && p.conns > 0),
         link: (isHost || p.token === token) && p.token.startsWith("s.") ? p.token : null,
       };

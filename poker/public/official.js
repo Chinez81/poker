@@ -10,16 +10,31 @@ window.Official = (() => {
   const fmtDate = s => s ? s.split("-").reverse().join(".") : "";
   const fmtTime = t => { if (!t) return ""; const d = new Date(t); return d.toLocaleDateString("ro-RO") + " " + d.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }); };
 
-  let root = null, state = null, players = [], canWrite = false, saveFn = null, onToast = () => {};
+  let root = null, state = null, players = [], allPlayers = [], canWrite = false, saveFn = null, onToast = () => {}, lastGames = [];
   let dirty = false, saving = false, savedAt = null, storage = "", remotePending = null;
   let cur = 1, tab = "seara", game = 1;
 
   function setData(payload) {
     state = JSON.parse(JSON.stringify(payload.data || { players: [], nights: {} }));
     if (!state.nights) state.nights = {};
-    players = (state.players || []).map(n => ({ id: n, name: n }));
+    allPlayers = (state.players || []).map(n => ({ id: n, name: n }));
+    players = allPlayers;
     savedAt = payload.savedAt || null; storage = payload.storage || "";
+    lastGames = payload.lastGames || lastGames || [];
   }
+  // cine apare într-o seară: jucătorii adăugați apar de la data adăugării; cei blocați nu mai apar (punctele rămân)
+  function inNight(id, d) {
+    const m = (state.meta || {})[id];
+    const has = d && (((d.absent || {})[id]) || Object.values(d.pts || {}).some(g => g && Number.isFinite(g[id])));
+    if (has) return true;
+    if (!m) return true;
+    const date = (d && d.date) || today();
+    if (m.since && date < m.since) return false;
+    if ((m.off || []).some(iv => date >= iv[0] && (!iv[1] || date < iv[1]))) return false;
+    return true;
+  }
+  function withNight(d, fn) { const keep = players; players = allPlayers.filter(p => inNight(p.id, d)); try { return fn(); } finally { players = keep; } }
+  const isOff = id => { const m = (state.meta || {})[id]; return !!(m && (m.off || []).some(iv => !iv[1])); };
   function night(n) {
     const id = nid(n);
     if (!state.nights[id]) state.nights[id] = { date: "", absent: {}, paid: {}, pts: {}, note: "" };
@@ -30,7 +45,7 @@ window.Official = (() => {
   const peek = n => state.nights[nid(n)];
   const hasData = n => { const d = peek(n); return !!d && (!!d.date || Object.values(d.pts || {}).some(g => Object.keys(g).length) || Object.values(d.absent || {}).some(Boolean)); };
   const presentIds = d => players.filter(p => !(d.absent || {})[p.id]).map(p => p.id);
-  const nameOf = id => (players.find(p => p.id === id) || { name: id }).name;
+  const nameOf = id => (allPlayers.find(p => p.id === id) || { name: id }).name;
 
   function gameInfo(d, g) {
     const pres = presentIds(d), gp = (d.pts || {})["g" + g] || {};
@@ -47,11 +62,14 @@ window.Official = (() => {
   }
   function nightSummary(n) {
     const d = peek(n) || { absent: {}, paid: {}, pts: {} };
-    const pts = {}; players.forEach(p => pts[p.id] = { games: [], total: 0 });
+    return withNight(d, () => nightSummary0(d, n));
+  }
+  function nightSummary0(d, n) {
+    const pts = {}; allPlayers.forEach(p => pts[p.id] = { games: [], total: 0 });
     let taxe = 0, fond = 0, played = 0;
     for (let g = 1; g <= JOCURI; g++) {
       const gi = gameInfo(d, g);
-      players.forEach(p => { const v = (d.absent || {})[p.id] ? null : gi.gp[p.id]; const ok = Number.isFinite(v); pts[p.id].games.push(ok ? v : null); if (ok) pts[p.id].total += v; });
+      allPlayers.forEach(p => { const v = (d.absent || {})[p.id] || !players.includes(p) ? null : gi.gp[p.id]; const ok = Number.isFinite(v); pts[p.id].games.push(ok ? v : null); if (ok) pts[p.id].total += v; });
       if (gi.complete) { taxe += gi.money.pot; fond += FOND; played++; }
     }
     const absIds = players.filter(p => (d.absent || {})[p.id]).map(p => p.id);
@@ -60,12 +78,12 @@ window.Official = (() => {
     return { d, pts, taxe, fond, played, absIds, penPaid, penDue };
   }
   function generalUpTo(n) {
-    const tot = {}; players.forEach(p => tot[p.id] = 0);
-    for (let i = 1; i <= n; i++) { const s = nightSummary(i); players.forEach(p => tot[p.id] += s.pts[p.id].total); }
+    const tot = {}; allPlayers.forEach(p => tot[p.id] = 0);
+    for (let i = 1; i <= n; i++) { const s = nightSummary(i); allPlayers.forEach(p => tot[p.id] += s.pts[p.id].total); }
     return tot;
   }
   function ranks(tot) {
-    const ids = players.map(p => p.id).sort((a, b) => tot[b] - tot[a]);
+    const ids = allPlayers.map(p => p.id).sort((a, b) => tot[b] - tot[a]);
     const r = {}; ids.forEach((id, i) => { r[id] = (i > 0 && tot[id] === tot[ids[i - 1]]) ? r[ids[i - 1]] : i + 1; });
     return { r, ids };
   }
@@ -97,14 +115,16 @@ window.Official = (() => {
     bar.innerHTML = `<span>${saving ? "Se salvează…" : "Ai modificări nesalvate"}</span>${remotePending ? `<button class="btn small" data-oact="discard">Renunță</button>` : ""}<button class="btn primary" data-oact="save" ${saving ? "disabled" : ""}>💾 Salvează</button>`;
     root.querySelector(".ofc-status").innerHTML = statusHtml();
   }
-  function refreshComputed() {
+  function refreshComputed() { const d0 = peek(cur) || { date: "" }; return withNight(d0, refreshComputed0); }
+  function refreshComputed0() {
     const s = nightSummary(cur), gi = gameInfo(s.d, game);
     const box = root.querySelector("#ofc-gamecalc"); if (box) box.innerHTML = gameCalc(gi);
     const tbl = root.querySelector("#ofc-score"); if (tbl) tbl.innerHTML = scoreTable(s);
     const m = root.querySelector("#ofc-money"); if (m) m.innerHTML = nightMoney(s);
     root.querySelectorAll(".gtab").forEach(b => { const g = +b.dataset.g; b.innerHTML = `J${g}${gameInfo(s.d, g).complete ? ' <span class="ck">✓</span>' : ""}`; });
   }
-  function viewNight() {
+  function viewNight() { const d0 = peek(cur) || { date: "" }; return withNight(d0, viewNight0); }
+  function viewNight0() {
     const s = nightSummary(cur), d = s.d, dis = canWrite ? "" : " disabled";
     let h = "";
     if (!canWrite) h += `<div class="ofc-ro">Vezi punctajul oficial al turneului. Doar organizatorul îl completează.</div>`;
@@ -129,7 +149,9 @@ window.Official = (() => {
     const gi = gameInfo(d, game);
     h += `<section class="panel"><h2>♣ Punctele pe jocuri</h2><div class="gtabs">`;
     for (let g = 1; g <= JOCURI; g++) h += `<button class="gtab${g === game ? " on" : ""}" data-oact="game" data-g="${g}">J${g}${gameInfo(d, g).complete ? ' <span class="ck">✓</span>' : ""}</button>`;
-    h += `</div><p class="hint">Locul 1 = 8 p, locul 2 = 7 p … Ultimul clasat primește 1 p + 1 p pentru fiecare absent.</p><div class="ofc-pts">`;
+    h += `</div><p class="hint">Locul 1 = 8 p, locul 2 = 7 p … Ultimul clasat primește 1 p + 1 p pentru fiecare absent.</p>`;
+    if (canWrite && lastGames.length) h += `<div class="ofc-fill"><label class="f">📥 Completează J${game} din jocul de la masă<select class="t" id="ofc-fillsel">${lastGames.map((g, i) => `<option value="${i}">${esc(g.label)} · ${fmtTime(g.at)}</option>`).join("")}</select></label><button class="btn small primary" data-oact="fill">Completează</button></div><p class="hint">Punctele se propun din locurile ocupate la masă. Verifică-le, corectează dacă e nevoie, apoi apasă 💾 Salvează.</p>`;
+    h += `<div class="ofc-pts">`;
     players.forEach(p => {
       if ((d.absent || {})[p.id]) { h += `<div class="ofc-ptrow abs"><div class="nm">${esc(p.name)}</div><div class="absl">absent</div></div>`; return; }
       const v = gi.gp[p.id];
@@ -151,7 +173,7 @@ window.Official = (() => {
       <div class="po"><div class="l">Fond finală</div><div class="v num">${lei(FOND)}</div><div class="w">din ${lei(m.pot)}</div></div></div>`;
   }
   function scoreTable(s) {
-    const gen = generalUpTo(cur), rk = ranks(gen).r;
+    const gen = withNight(null, () => generalUpTo(cur)), rk = ranks(gen).r;
     let h = `<div class="tw"><table class="res"><thead><tr><th class="nm">Jucător</th>`;
     for (let g = 1; g <= JOCURI; g++) h += `<th>J${g}</th>`;
     h += `<th>Seară</th><th>General</th><th>Loc</th></tr></thead><tbody>`;
@@ -177,7 +199,7 @@ window.Official = (() => {
     let h = `<section class="panel"><h2>♠ Clasament general<span class="aside">după seara ${last}</span></h2><div class="plist">`;
     ids.forEach(id => {
       const abs = sums.filter(s => (s.d.absent || {})[id]).length;
-      h += `<div class="ofc-rk${r[id] === 1 ? " p1" : ""}"><div class="pos"><span>Locul</span><b>${r[id]}</b></div><div class="nm">${esc(nameOf(id))}<div class="hint">${abs ? abs + (abs === 1 ? " absență" : " absențe") : "nicio absență"}</div></div><div class="ptsv num">${tot[id]} <small>p</small></div></div>`;
+      h += `<div class="ofc-rk${r[id] === 1 ? " p1" : ""}"><div class="pos"><span>Locul</span><b>${r[id]}</b></div><div class="nm">${esc(nameOf(id))}${isOff(id) ? ' <span class="tag muted">blocat</span>' : ""}<div class="hint">${abs ? abs + (abs === 1 ? " absență" : " absențe") : "nicio absență"}</div></div><div class="ptsv num">${tot[id]} <small>p</small></div></div>`;
     });
     h += `</div></section><section class="panel"><h2><span class="red">♥</span> Puncte pe seri</h2><div class="tw"><table class="res"><thead><tr><th>Loc</th><th class="nm">Jucător</th>`;
     for (let i = 1; i <= last; i++) h += `<th>S${i}</th>`;
@@ -246,6 +268,18 @@ window.Official = (() => {
       if (!d.date) d.date = today();
       changed(); return render();
     }
+    if (a === "fill") {
+      const sel = root.querySelector("#ofc-fillsel"), g = lastGames[+(sel ? sel.value : 0)];
+      if (!g) return;
+      const k = "g" + game; d.pts[k] = d.pts[k] || {};
+      const pres = withNight(d, () => presentIds(d));
+      let n = 0;
+      g.places.forEach(pl => { const id = pres.find(x => x.toLowerCase() === String(pl.name).toLowerCase()); if (id) { d.pts[k][id] = Math.max(1, 9 - pl.place); n++; } });
+      if (!d.date) d.date = today();
+      changed(); render();
+      onToast(n ? `Am completat ${n} jucători pentru J${game}. Verifică și apasă 💾 Salvează.` : "Niciun jucător prezent nu apare în jocul ales.");
+      return;
+    }
     if (a === "pay") { const id = b.dataset.id; if (d.paid[id]) delete d.paid[id]; else d.paid[id] = today(); changed(); return render(); }
     if (a === "paylate") { night(+b.dataset.n).paid[b.dataset.id] = today(); changed(); return render(); }
   }
@@ -307,5 +341,15 @@ window.Official = (() => {
     setData(payload);
     if (root) render();
   }
-  return { open, update, isOpen: () => !!root, hasUnsaved: () => dirty };
+  // pentru foaia tipărită: totalurile de până acum
+  function stats(payload) {
+    const keep = [state, players, allPlayers, savedAt, storage, lastGames];
+    try {
+      setData(payload);
+      const last = lastNight(), tot = generalUpTo(last);
+      let fond = 0; for (let i = 1; i <= last; i++) { const s = nightSummary(i); fond += s.fond + s.penPaid; }
+      return { last, tot, fond, players: allPlayers.map(p => p.id).filter(id => !isOff(id)) };
+    } finally { [state, players, allPlayers, savedAt, storage, lastGames] = keep; }
+  }
+  return { open, update, stats, isOpen: () => !!root, hasUnsaved: () => dirty };
 })();

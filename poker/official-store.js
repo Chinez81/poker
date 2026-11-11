@@ -27,20 +27,22 @@ function gh(method, path, body) {
 }
 
 class OfficialStore {
-  constructor(roster) {
-    this.data = { players: roster.slice(), nights: {} };
+  // data = valorile de pornire; file = fișierul de pe GitHub (punctajul oficial sau datele aplicației)
+  constructor(data, file) {
+    this.data = Array.isArray(data) ? { players: data.slice(), nights: {} } : JSON.parse(JSON.stringify(data));
+    this.file = file || FILE; this.queue = Promise.resolve();
     this.savedAt = null; this.sha = null; this.ready = !enabled; this.lastError = null;
     this.storage = enabled ? "github" : "memory";
   }
   async load() {
     if (!enabled) return;
     try {
-      const r = await gh("GET", `/repos/${REPO}/contents/${encodeURIComponent(FILE)}?ref=${encodeURIComponent(BRANCH)}`);
+      const r = await gh("GET", `/repos/${REPO}/contents/${encodeURIComponent(this.file)}?ref=${encodeURIComponent(BRANCH)}`);
       if (r.status === 200 && r.body && r.body.content) {
         const j = JSON.parse(Buffer.from(r.body.content, "base64").toString("utf8"));
         if (j && j.data) { this.data = j.data; this.savedAt = j.savedAt || null; }
         this.sha = r.body.sha;
-        console.log("Punctaj oficial încărcat de pe GitHub.");
+        console.log("Încărcat de pe GitHub: " + this.file);
       } else if (r.status === 404) {
         await this.ensureBranch();
         console.log("Punctaj oficial: încă nu există fișier pe GitHub (se creează la prima salvare).");
@@ -58,19 +60,25 @@ class OfficialStore {
     const c = await gh("POST", `/repos/${REPO}/git/refs`, { ref: "refs/heads/" + BRANCH, sha: m.body.object.sha });
     if (c.status !== 201 && c.status !== 422) throw new Error("Nu am putut crea ramura „" + BRANCH + "” pe GitHub (" + c.status + ").");
   }
-  async save(data) {
+  // salvările se fac una după alta, ca să nu se suprapună
+  save(data) {
+    const run = this.queue.then(() => this.saveNow(data));
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  async saveNow(data) {
     const savedAt = Date.now();
     this.data = data; this.savedAt = savedAt;
     if (!enabled) return { savedAt, storage: "memory" };
     const content = Buffer.from(JSON.stringify({ savedAt, data }, null, 1)).toString("base64");
-    const put = async () => gh("PUT", `/repos/${REPO}/contents/${encodeURIComponent(FILE)}`, {
-      message: "Punctaj oficial salvat " + new Date(savedAt).toISOString().slice(0, 16).replace("T", " "),
+    const put = async () => gh("PUT", `/repos/${REPO}/contents/${encodeURIComponent(this.file)}`, {
+      message: this.file + " salvat " + new Date(savedAt).toISOString().slice(0, 16).replace("T", " "),
       content, branch: BRANCH, ...(this.sha ? { sha: this.sha } : {}),
     });
     let r = await put();
     if (r.status === 404 && !this.sha) { await this.ensureBranch(); r = await put(); }
     if (r.status === 409 || r.status === 422) { // fișierul s-a schimbat între timp: iau versiunea curentă și scriu din nou
-      const g = await gh("GET", `/repos/${REPO}/contents/${encodeURIComponent(FILE)}?ref=${encodeURIComponent(BRANCH)}`);
+      const g = await gh("GET", `/repos/${REPO}/contents/${encodeURIComponent(this.file)}?ref=${encodeURIComponent(BRANCH)}`);
       this.sha = g.status === 200 ? g.body.sha : null;
       r = await put();
     }

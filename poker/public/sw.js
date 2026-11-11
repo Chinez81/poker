@@ -6,7 +6,7 @@ self.addEventListener("fetch", () => {});
 
 self.addEventListener("push", event => {
   event.waitUntil((async () => {
-    let msg = { title: "♠ Poker între prieteni", body: "E rândul tău la masă!", url: "/", tag: "poker" };
+    let msg = { title: "♠ POKER KY", body: "E rândul tău la masă!", url: "/", tag: "poker" };
     try {
       const sub = await self.registration.pushManager.getSubscription();
       if (sub) {
