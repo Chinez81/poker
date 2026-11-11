@@ -30,10 +30,19 @@ window.Official = (() => {
     if (!m) return true;
     const date = (d && d.date) || today();
     if (m.since && date < m.since) return false;
-    if ((m.off || []).some(iv => date >= iv[0] && (!iv[1] || date < iv[1]))) return false;
     return true;
   }
-  function withNight(d, fn) { const keep = players; players = allPlayers.filter(p => inNight(p.id, d)); try { return fn(); } finally { players = keep; } }
+  // jucător blocat în seara respectivă: apare „BLOCAT”, fără puncte, fără taxă și fără penalizare
+  let curD = null;
+  function blockedIn(id, d) {
+    d = d || curD;
+    const m = (state.meta || {})[id]; if (!m || !(m.off || []).length) return false;
+    const has = d && (((d.absent || {})[id]) || Object.values(d.pts || {}).some(g => g && Number.isFinite(g[id])));
+    if (has) return false;
+    const date = (d && d.date) || today();
+    return (m.off || []).some(iv => date >= iv[0] && (!iv[1] || date < iv[1]));
+  }
+  function withNight(d, fn) { const keep = players, kd = curD; players = allPlayers.filter(p => inNight(p.id, d)); curD = d; try { return fn(); } finally { players = keep; curD = kd; } }
   const isOff = id => { const m = (state.meta || {})[id]; return !!(m && (m.off || []).some(iv => !iv[1])); };
   function night(n) {
     const id = nid(n);
@@ -44,7 +53,7 @@ window.Official = (() => {
   }
   const peek = n => state.nights[nid(n)];
   const hasData = n => { const d = peek(n); return !!d && (!!d.date || Object.values(d.pts || {}).some(g => Object.keys(g).length) || Object.values(d.absent || {}).some(Boolean)); };
-  const presentIds = d => players.filter(p => !(d.absent || {})[p.id]).map(p => p.id);
+  const presentIds = d => players.filter(p => !(d.absent || {})[p.id] && !blockedIn(p.id, d)).map(p => p.id);
   const nameOf = id => (allPlayers.find(p => p.id === id) || { name: id }).name;
 
   function gameInfo(d, g) {
@@ -69,7 +78,7 @@ window.Official = (() => {
     let taxe = 0, fond = 0, played = 0;
     for (let g = 1; g <= JOCURI; g++) {
       const gi = gameInfo(d, g);
-      allPlayers.forEach(p => { const v = (d.absent || {})[p.id] || !players.includes(p) ? null : gi.gp[p.id]; const ok = Number.isFinite(v); pts[p.id].games.push(ok ? v : null); if (ok) pts[p.id].total += v; });
+      allPlayers.forEach(p => { const v = (d.absent || {})[p.id] || !players.includes(p) || blockedIn(p.id, d) ? null : gi.gp[p.id]; const ok = Number.isFinite(v); pts[p.id].games.push(ok ? v : null); if (ok) pts[p.id].total += v; });
       if (gi.complete) { taxe += gi.money.pot; fond += FOND; played++; }
     }
     const absIds = players.filter(p => (d.absent || {})[p.id]).map(p => p.id);
@@ -133,6 +142,7 @@ window.Official = (() => {
     h += `</div><div class="ofc-rowf"><label for="ofc-date">Data serii</label>${canWrite ? `<input type="date" id="ofc-date" class="t" value="${esc(d.date || "")}">` : `<b>${d.date ? fmtDate(d.date) : "—"}</b>`}</div></section>`;
     h += `<section class="panel"><h2><span class="red">♥</span> Prezență și penalizări</h2><div class="plist">`;
     players.forEach(p => {
+      if (blockedIn(p.id, d)) { h += `<div class="ofc-prow"><div class="nm">${esc(p.name)}</div><div class="tag blk">🔒 BLOCAT</div></div>`; return; }
       const ab = !!(d.absent || {})[p.id], pd = (d.paid || {})[p.id];
       h += `<div class="ofc-prow"><div class="nm">${esc(p.name)}</div>`;
       if (canWrite) h += `<div class="ofc-seg"><button class="p${ab ? "" : " on"}" data-oact="pres" data-id="${esc(p.id)}" data-v="p">P</button><button class="a${ab ? " on" : ""}" data-oact="pres" data-id="${esc(p.id)}" data-v="a">A</button></div>`;
@@ -153,6 +163,7 @@ window.Official = (() => {
     if (canWrite && lastGames.length) h += `<div class="ofc-fill"><label class="f">📥 Completează J${game} din jocul de la masă<select class="t" id="ofc-fillsel">${lastGames.map((g, i) => `<option value="${i}">${esc(g.label)} · ${fmtTime(g.at)}</option>`).join("")}</select></label><button class="btn small primary" data-oact="fill">Completează</button></div><p class="hint">Punctele se propun din locurile ocupate la masă. Verifică-le, corectează dacă e nevoie, apoi apasă 💾 Salvează.</p>`;
     h += `<div class="ofc-pts">`;
     players.forEach(p => {
+      if (blockedIn(p.id, d)) { h += `<div class="ofc-ptrow abs"><div class="nm">${esc(p.name)}</div><div class="absl">blocat</div></div>`; return; }
       if ((d.absent || {})[p.id]) { h += `<div class="ofc-ptrow abs"><div class="nm">${esc(p.name)}</div><div class="absl">absent</div></div>`; return; }
       const v = gi.gp[p.id];
       h += `<div class="ofc-ptrow"><label class="nm">${esc(p.name)}</label><input class="t ofc-pt num" data-id="${esc(p.id)}" type="number" inputmode="numeric" min="0" max="99" placeholder="–" value="${Number.isFinite(v) ? v : ""}"${dis}></div>`;
@@ -180,7 +191,8 @@ window.Official = (() => {
     players.forEach(p => {
       const ps = s.pts[p.id];
       h += `<tr><td class="nm">${esc(p.name)}</td>`;
-      if ((s.d.absent || {})[p.id]) h += `<td class="muted" colspan="5">absent</td><td>0</td>`;
+      if (blockedIn(p.id, s.d)) h += `<td class="muted" colspan="5">🔒 blocat</td><td>0</td>`;
+      else if ((s.d.absent || {})[p.id]) h += `<td class="muted" colspan="5">absent</td><td>0</td>`;
       else { ps.games.forEach(v => h += `<td>${v ?? "–"}</td>`); h += `<td class="red"><b>${ps.total}</b></td>`; }
       h += `<td class="pts">${gen[p.id]}</td><td><b>${rk[p.id]}</b></td></tr>`;
     });
@@ -206,10 +218,10 @@ window.Official = (() => {
     h += `<th>Total</th></tr></thead><tbody>`;
     ids.forEach(id => {
       h += `<tr><td><b>${r[id]}</b></td><td class="nm">${esc(nameOf(id))}</td>`;
-      sums.forEach(s => h += (s.d.absent || {})[id] ? `<td class="muted">A</td>` : `<td>${s.pts[id].total}</td>`);
+      sums.forEach(s => h += (s.d.absent || {})[id] ? `<td class="muted">A</td>` : blockedIn(id, s.d) ? `<td class="muted">🔒</td>` : `<td>${s.pts[id].total}</td>`);
       h += `<td class="pts">${tot[id]}</td></tr>`;
     });
-    return h + `</tbody></table></div><p class="hint">A = absent (0 puncte).</p></section>`;
+    return h + `</tbody></table></div><p class="hint">A = absent (0 puncte). 🔒 = blocat (fără puncte, fără penalizare).</p></section>`;
   }
   function viewMoney() {
     const last = lastNight();
@@ -252,6 +264,7 @@ window.Official = (() => {
   }
   function onClick(e) {
     if (e.target.closest("[data-oclose]")) return close();
+    if (e.target.closest("[data-ohome]")) { if (dirty) return onToast("Ai modificări nesalvate. Apasă 💾 Salvează sau ✕ ca să renunți."); root.remove(); root = null; if (location.pathname === "/" && document.querySelector(".hub")) return; location.href = "/"; return; }
     const t = e.target.closest("[data-otab]"); if (t) { tab = t.dataset.otab; render(); root.querySelector(".ofc-body").scrollTop = 0; return; }
     const b = e.target.closest("[data-oact]"); if (!b || b.disabled) return;
     const a = b.dataset.oact;
@@ -314,7 +327,7 @@ window.Official = (() => {
     if (!root) {
       root = document.createElement("div");
       root.className = "ofc";
-      root.innerHTML = `<div class="ofc-head"><div class="ofc-title">📋 Punctaj Oficial Live<div class="ofc-status"></div></div><button class="iconbtn ofc-x" data-oclose aria-label="Închide">✕</button></div>
+      root.innerHTML = `<div class="ofc-head"><div class="ofc-title">📋 Punctaj Oficial Live<div class="ofc-status"></div></div><button class="iconbtn ofc-home" data-ohome aria-label="Home">🏠</button><button class="iconbtn ofc-x" data-oclose aria-label="Închide">✕</button></div>
         <div class="ofc-tabs"><button class="ofc-tab" data-otab="seara">♠ Seara</button><button class="ofc-tab" data-otab="clasament">♥ Clasament</button><button class="ofc-tab" data-otab="bani">♦ Fond finală</button></div>
         <div class="ofc-body"></div><div class="ofc-savebar" hidden></div>`;
       root.addEventListener("click", onClick); root.addEventListener("input", onInput); root.addEventListener("change", onChange); root.addEventListener("keydown", onKey);

@@ -170,6 +170,7 @@ class Room {
     };
     this.players.push(p);
     if (inGame && this.isTournament()) { p.waiting = false; p.spectator = true; p.chips = 0; }
+    if (this.onAdd) try { this.onAdd(p); } catch (_) {}
     if (!quiet) this.addLog(`${p.name} a fost adăugat la masă.`);
     return p;
   }
@@ -202,18 +203,23 @@ class Room {
   }
   // invitația la turneu: gazda o trimite, fiecare răspunde „Particip” sau „Nu pot”
   inviteActive(now) { return !!(this.invite && (now || Date.now()) - this.invite.at < 4 * 3600 * 1000); }
-  sendInvite(byName, now) {
-    if (!this.inviteActive(now)) this.invite = { at: now, by: byName, answers: {} };
+  // only = lista de tokenuri invitate (un singur jucător); fără ea, sunt invitați toți
+  sendInvite(byName, now, only) {
+    if (!this.inviteActive(now)) this.invite = { at: now, by: byName, answers: {}, to: [] };
     else this.invite.at = now; // retrimisă: păstrăm răspunsurile date
-    this.addLog(`${byName} a trimis invitația la ${this.isTournament() ? "turneu" : "joc"}.`);
-    return this.players.filter(p => !p.bot && p.token !== this.hostToken && !(p.token in this.invite.answers));
+    this.invite.to = this.invite.to || [];
+    const targets = this.players.filter(p => !p.bot && p.token !== this.hostToken && (!only || only.includes(p.token)) && !(p.token in this.invite.answers));
+    targets.forEach(p => { if (!this.invite.to.includes(p.token)) this.invite.to.push(p.token); });
+    this.addLog(only ? `${byName} l-a invitat pe ${targets.map(p => p.name).join(", ") || "jucător"}.` : `${byName} a trimis invitația la ${this.isTournament() ? "turneu" : "joc"}.`);
+    return targets;
   }
+  invitedPending(token) { return !!(this.inviteActive() && (this.invite.to || []).includes(token) && !(token in this.invite.answers)); }
   cancelInvite() { this.invite = null; this.addLog("Invitația a fost anulată."); }
   answerInvite(p, yes) {
     if (!this.inviteActive()) throw new Error("Invitația nu mai este valabilă.");
     this.invite.answers[p.token] = yes ? "da" : "nu";
     if (yes) {
-      p.sitOut = false; p.sitOutOnce = false; p.autoSit = false; p.pending = false;
+      p.sitOut = false; p.sitOutOnce = false; p.autoSit = false; p.pending = false; p.seen = true;
       if (this.gameRunning() && (p.spectator || p.out) && !p.out) { this.joinRunning(p); this.addLog(`${p.name} a acceptat invitația și intră în joc de la mâna următoare.`); }
       else { if (!this.gameRunning()) p.spectator = false; this.addLog(`${p.name} a acceptat invitația: participă. ✅`); }
     } else {
@@ -350,7 +356,7 @@ class Room {
   // ----- desfășurarea jocului -----
   start(now) {
     const inv = this.inviteActive(now) ? this.invite.answers : null;
-    const ps = this.players.filter(p => !p.leaving && !p.sitOut && p.seen && (!inv || p.bot || p.token === this.hostToken || inv[p.token] === "da"));
+    const ps = this.players.filter(p => !p.leaving && !p.sitOut && p.seen && (!inv || p.bot || p.token === this.hostToken || inv[p.token] === "da" || (p.conns > 0 && inv[p.token] !== "nu")));
     if (ps.length < 2) throw new Error("Este nevoie de cel puțin 2 jucători prezenți la masă (care și-au deschis linkul și nu stau deoparte).");
     if (!this.event || this.event.done) throw new Error("Alege întâi: joc simplu sau turneu.");
     if (this.settings.shuffleSeats) this.shuffleSeats();
@@ -853,8 +859,8 @@ class Room {
       rebuyOpen: this.rebuyOpen(),
       canRebuy: !!(me && me.out && this.rebuyOpen() && (this.practice || me.rebuys < this.settings.rebuyMax)),
       practice: !!this.practice,
-      invite: this.inviteActive(now) ? { by: this.invite.by, at: this.invite.at, answers: Object.fromEntries(this.players.filter(p => p.token in this.invite.answers).map(p => [p.id, this.invite.answers[p.token]])) } : null,
-      myInvite: !!(me && this.inviteActive(now) && !me.bot && token !== this.hostToken && !(token in this.invite.answers) && !(this.gameRunning() && !me.spectator && !me.out)),
+      invite: this.inviteActive(now) ? { by: this.invite.by, at: this.invite.at, answers: Object.fromEntries(this.players.filter(p => p.token in this.invite.answers).map(p => [p.id, this.invite.answers[p.token]])), to: this.players.filter(p => (this.invite.to || []).includes(p.token)).map(p => p.id) } : null,
+      myInvite: !!(me && !me.bot && token !== this.hostToken && this.invitedPending(token) && !(this.gameRunning() && !me.spectator && !me.out)),
       myBankMs: me ? me.bank : 0,
       canShow: !!(h && h.done && me && h.holes[token] && !h.reveal[token]),
       players,
