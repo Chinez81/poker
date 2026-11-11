@@ -214,7 +214,7 @@ function ensureSimple() { return ensureGroupRoom(SIMPLE_CODE, { rebuyUntilLevel:
 function ensureFriends() {
   let room = rooms.get(FRIENDS_CODE);
   if (!room) {
-    room = wireRoom(new Room(FRIENDS_CODE, null)); room.friends = true; rooms.set(FRIENDS_CODE, room);
+    room = wireRoom(new Room(FRIENDS_CODE, null)); room.friends = true; room.tournamentRules = true; rooms.set(FRIENDS_CODE, room); // aceleași reguli ca la turneu: fără reintrare
     const t = sign(FRIENDS_CODE, PRESET.host, true);
     room.addPlayer(PRESET.host, t, true, true); room.hostToken = t;
   }
@@ -359,7 +359,7 @@ function broadcast(room) {
   if (!set) return;
   const now = Date.now();
   for (const s of set) {
-    try { const vw = decorate(room.view(s.token, now), s.token, room); s.res.write("data: " + JSON.stringify(vw) + "\n\n"); } catch (_) {}
+    try { const vw = decorate(room.view(s.token, now), s.token, room); s.res.write("data: " + JSON.stringify(vw) + "\n\n"); } catch (e) { console.error("broadcast", room.code, e.message); }
   }
 }
 
@@ -416,7 +416,11 @@ async function api(req, res, url) {
     if (!r) return json(res, 200, { status: "expired" });
     return json(res, 200, { status: r.status, url: r.status === "ok" ? "/masa/" + PRESET.code + "/" + sign(PRESET.code, r.name, false, { v: curVer(r.name) }) : null });
   }
-  if (req.method === "GET" && route === "fscore") return json(res, 200, A().fscore);
+  if (req.method === "GET" && route === "fscore") {
+    // toți jucătorii grupului + prietenii activi apar automat în punctajul Poker Friends
+    const people = A().roster.filter(n => !isBlocked(n)).concat(A().friends.list.filter(f => f.status === "ok").map(f => f.name)).sort((a, b) => a.localeCompare(b, "ro"));
+    return json(res, 200, Object.assign({}, A().fscore, { people }));
+  }
   if (req.method === "GET" && route === "ice") return json(res, 200, { iceServers: ICE_SERVERS });
   if (req.method === "GET" && route === "vapid") return json(res, 200, { key: VAPID.publicB64 });
   if (req.method === "GET" && route === "pushmsg") {
@@ -618,7 +622,7 @@ async function api(req, res, url) {
       case "extra": room.extraTime(p.token, now); break;
       case "event": {
         needHost();
-        const fixed = room.code === PRESET.code ? "turneu" : room.code === SIMPLE_CODE ? "simplu" : null;
+        const fixed = room.code === PRESET.code ? "turneu" : room.code === SIMPLE_CODE || room.code === FRIENDS_CODE ? "simplu" : null;
         room.newEvent(fixed || body.type, fixed === "simplu" ? false : body.scoring, body.totalGames, now);
         if (body.startNow) room.start(now);
         break;

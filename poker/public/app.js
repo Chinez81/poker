@@ -879,14 +879,14 @@
     }
     draft = JSON.parse(JSON.stringify(S.settings)); draftDirty = false;
     const named = S.mainRoom || S.simpleRoom || S.friendsRoom;
-    const sub = S.mainRoom ? "Turneul online: mai multe jocuri, cu punctaj" : S.simpleRoom ? "Joc simplu, cu reintrare (rebuy)" : S.friendsRoom ? "Masa cu prietenii, doar cu invitația gazdei" : "";
+    const sub = S.mainRoom ? "Turneul online: mai multe jocuri, cu punctaj" : S.simpleRoom ? "Joc simplu, cu reintrare (rebuy)" : S.friendsRoom ? "Cu prietenii, după regulile turneului · doar cu invitația gazdei" : "";
     $app.innerHTML = `<div class="wrap">${homeBar()}
       <div class="hero"><h1>${esc(roomTitle())}</h1>${sub ? `<p>${sub}</p>` : ""}</div>
       <div id="adminAlerts"></div>
       <div id="navArea" class="navarea"></div>
       ${named ? "" : `<section class="panel"><h2>Masa <span class="bigcode">${esc(S.code)}</span></h2>
         <div class="share"><div class="link" id="shareLink">${esc(location.origin + "/masa/" + S.code)}</div><button class="btn" data-act="copy">Copiază linkul</button></div></section>`}
-      <section class="panel"><h2>${S.mainRoom ? "Turneul" : S.simpleRoom ? "Jocul" : "Ce jucăm"}</h2><div id="eventArea"></div></section>
+      <section class="panel"><h2>${S.mainRoom ? "Turneul" : (S.simpleRoom || S.friendsRoom) ? "Jocul" : "Ce jucăm"}</h2><div id="eventArea"></div></section>
       <div id="invArea"></div>
       <div id="results"></div>
       <section class="panel"><h2>Jucători <span class="aside" id="pcount"></span></h2><div class="plist" id="plist"></div><div id="friendsTools"></div><div id="mySit"></div></section>
@@ -971,14 +971,14 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
   }
   function eventHtml() {
     const ev = S.event;
-    const fixed = S.mainRoom ? "turneu" : S.simpleRoom ? "simplu" : null;
+    const fixed = S.mainRoom ? "turneu" : (S.simpleRoom || S.friendsRoom) ? "simplu" : null;
     const t = fixed || evType;
     const cur = ev && !ev.done ? `<p class="evnow">${ev.type === "turneu" ? `🏆 <b>${esc(ev.name)}</b> · urmează jocul ${ev.gamesDone + 1} din ${ev.totalGames}` : `♠ <b>${esc(ev.name)}</b>`}${ev.scoring ? " · cu punctaj" : ""}</p>` : "";
     if (!S.isHost) return cur || `<p class="hint">Gazda pornește jocul. Primești invitație pe ecranul Home.</p>`;
     if (ev && !ev.done && !chooserOpen) return cur + `<button class="btn small" data-act="chooser">${fixed === "turneu" ? "Turneu nou" : fixed === "simplu" ? "Joc nou" : "Schimbă: joc sau turneu nou"}</button>`;
     return cur + `<div class="chooser">
       ${fixed ? "" : `<div class="seg2"><button class="${t === "simplu" ? "on" : ""}" data-act="evType" data-v="simplu">Joc simplu</button><button class="${t === "turneu" ? "on" : ""}" data-act="evType" data-v="turneu">Turneu</button></div>`}
-      ${t === "turneu" ? `<label class="f">Câte jocuri are turneul<input class="t num" type="number" id="evGames" min="1" max="50" value="${evGames}"></label><label class="switch"><input type="checkbox" id="evScoring" ${evScoring ? "checked" : ""}> Cu punctaj (locul 1 = 8 p … locul 8 = 1 p)</label>` : `<p class="hint">Un singur joc. Reintrarea (rebuy) se setează mai jos, în Setările mesei.</p>`}
+      ${t === "turneu" ? `<label class="f">Câte jocuri are turneul<input class="t num" type="number" id="evGames" min="1" max="50" value="${evGames}"></label><label class="switch"><input type="checkbox" id="evScoring" ${evScoring ? "checked" : ""}> Cu punctaj (locul 1 = 8 p … locul 8 = 1 p)</label>` : (S.friendsRoom ? `<p class="hint">Un joc, după regulile turneului: fără reintrare. Cine vine după start intră doar dacă îl accepți.</p>` : `<p class="hint">Un singur joc. Reintrarea (rebuy) se setează mai jos, în Setările mesei.</p>`)}
       ${S.friendsRoom ? "" : `<button class="btn primary wide" data-act="newEventInvite">📨 Invită toți și așteaptă răspunsurile</button>`}
       <button class="btn wide ${S.friendsRoom ? "primary" : ""}" data-act="newEvent">${t === "turneu" ? "Pornește turneul acum" : "Pornește jocul acum"}${S.friendsRoom ? "" : " (fără invitație)"}</button>
       ${ev && !ev.done ? `<button class="btn small" data-act="chooserClose">Înapoi</button>` : ""}</div>`;
@@ -1060,7 +1060,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
   function updateStartArea() {
     const n = S.players.length;
     patch("startArea", S.isHost
-      ? `${draftDirty ? `<button class="btn wide" data-act="saveSettings" style="margin-bottom:10px">Salvează setările</button>` : ""}${S.event && !S.event.done ? `<button class="btn primary wide" data-act="start" ${n < 2 ? "disabled" : ""}>${S.event.type === "turneu" ? `Începe jocul ${S.event.gamesDone + 1} din ${S.event.totalGames}` : "Începe jocul"}${S.invite ? ` (${S.players.filter(p => p.bot || p.me || S.invite.answers[p.id] === "da").length} participă)` : ""}</button>` : `<p class="hint" style="text-align:center">${S.mainRoom ? "Pornește turneul de mai sus." : S.simpleRoom ? "Pornește jocul de mai sus." : "Alege mai sus: joc simplu sau turneu."}</p>`}${n < 2 ? `<p class="hint" style="text-align:center">Este nevoie de cel puțin 2 jucători.</p>` : ""}`
+      ? `${draftDirty ? `<button class="btn wide" data-act="saveSettings" style="margin-bottom:10px">Salvează setările</button>` : ""}${S.event && !S.event.done ? `<button class="btn primary wide" data-act="start" ${n < 2 ? "disabled" : ""}>${S.event.type === "turneu" ? `Începe jocul ${S.event.gamesDone + 1} din ${S.event.totalGames}` : "Începe jocul"}${S.invite ? ` (${S.players.filter(p => p.bot || p.me || S.invite.answers[p.id] === "da").length} participă)` : ""}</button>` : `<p class="hint" style="text-align:center">${S.mainRoom ? "Pornește turneul de mai sus." : (S.simpleRoom || S.friendsRoom) ? "Pornește jocul de mai sus." : "Alege mai sus: joc simplu sau turneu."}</p>`}${n < 2 ? `<p class="hint" style="text-align:center">Este nevoie de cel puțin 2 jucători.</p>` : ""}`
       : `<div class="panel"><p class="hint" style="text-align:center">Așteptăm ca gazda să pornească jocul…</p><button class="btn small" data-act="leave" data-label="Ieși de la masă">Ieși de la masă</button></div>`);
   }
   function settingsRead() {
@@ -1095,7 +1095,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
       <p class="hint">După ultimul nivel, blind-urile se dublează automat.</p>
     <h3 class="sub">Intrări și reintrări</h3>
     <p class="hint">La jocul simplu, cine se conectează intră direct (de la mâna următoare). La turneu, cine vrea să intre după start îți trimite o cerere pe care o accepți sau o refuzi.</p>
-    ${S.mainRoom ? `<p class="hint">La turneu nu există reintrare.</p>` : `<div class="settings">${num("rebuyUntilLevel", "Reintrare (doar la joc simplu) până la nivelul (0 = fără)", 0, 1)}${num("rebuyMax", "Câte reintrări are un jucător", 1, 1)}</div>`}
+    ${S.mainRoom || S.friendsRoom ? `<p class="hint">${S.friendsRoom ? "La Poker Friends se joacă după regulile turneului: fără reintrare." : "La turneu nu există reintrare."}</p>` : `<div class="settings">${num("rebuyUntilLevel", "Reintrare (doar la joc simplu) până la nivelul (0 = fără)", 0, 1)}${num("rebuyMax", "Câte reintrări are un jucător", 1, 1)}</div>`}
     <label class="switch"><input type="checkbox" data-k="shuffleSeats" ${d.shuffleSeats ? "checked" : ""}> Amestecă locurile la începutul fiecărui joc</label>
     <h3 class="sub">Pauze</h3>
     <div class="settings">${num("breakEveryMin", "Pauză la fiecare (minute, 0 = fără)", 0, 5)}${num("breakMin", "Durata pauzei (minute)", 1, 1)}</div>
@@ -1177,7 +1177,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
     if (a === "newEventInvite") {
       readChooser(b.closest(".chooser"));
       if (draftDirty) { await post("settings", { settings: draft }); draftDirty = false; }
-      await post("event", { type: S.mainRoom ? "turneu" : S.simpleRoom ? "simplu" : evType, scoring: evScoring, totalGames: evGames, startNow: false });
+      await post("event", { type: S.mainRoom ? "turneu" : (S.simpleRoom || S.friendsRoom) ? "simplu" : evType, scoring: evScoring, totalGames: evGames, startNow: false });
       await post("invite");
       chooserOpen = false; toast("Invitația a fost trimisă. Vezi mai jos cine participă.");
       return true;
@@ -1186,7 +1186,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
       const box = b.closest(".chooser"); readChooser(box);
       if (a === "newEventNow" && !confirmed("newEventNow", b, "Jocul curent se oprește. Apasă din nou")) return true;
       if (draftDirty) { await post("settings", { settings: draft }); draftDirty = false; }
-      await post("event", { type: S.mainRoom ? "turneu" : S.simpleRoom ? "simplu" : evType, scoring: evScoring, totalGames: evGames, startNow: a === "newEventNow" || S.players.length >= 2 });
+      await post("event", { type: S.mainRoom ? "turneu" : (S.simpleRoom || S.friendsRoom) ? "simplu" : evType, scoring: evScoring, totalGames: evGames, startNow: a === "newEventNow" || S.players.length >= 2 });
       chooserOpen = false;
       return true;
     }
@@ -1582,7 +1582,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
         <button class="btn" data-act="abort" data-label="Oprește și mergi la meniul inițial">Oprește și mergi la meniul inițial</button>
         <p class="hint">„Încheie” face clasamentul după fise. „Reîncepe” anulează jocul și împarte din nou fisele tuturor. „Meniul inițial” oprește jocul fără rezultat: acolo alegi alt joc sau turneu și schimbi orice setare.</p>
         ${invitePanelHtml()}
-        ${(() => { const fx = S.mainRoom ? "turneu" : S.simpleRoom ? "simplu" : null, t = fx || evType; return `<h3 class="sub">${t === "turneu" ? "Turneu nou" : "Joc nou"}</h3>
+        ${(() => { const fx = S.mainRoom ? "turneu" : (S.simpleRoom || S.friendsRoom) ? "simplu" : null, t = fx || evType; return `<h3 class="sub">${t === "turneu" ? "Turneu nou" : "Joc nou"}</h3>
         <div class="chooser">
           ${fx ? "" : `<div class="seg2"><button class="${t === "simplu" ? "on" : ""}" data-act="evType" data-v="simplu">Joc simplu</button><button class="${t === "turneu" ? "on" : ""}" data-act="evType" data-v="turneu">Turneu</button></div>`}
           ${t === "turneu" ? `<label class="f">Câte jocuri are turneul<input class="t num" type="number" id="evGames" min="1" max="50" value="${evGames}"></label><label class="switch"><input type="checkbox" id="evScoring" ${evScoring ? "checked" : ""}> Cu punctaj</label>` : ""}

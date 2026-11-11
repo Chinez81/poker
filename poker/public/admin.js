@@ -292,8 +292,8 @@ window.PokerAdmin = (() => {
   }
   function norm() {
     fs = fs || {}; fs.players = fs.players || []; fs.games = fs.games || []; fs.finals = fs.finals || [];
-    const S = fsCtx && fsCtx.S();
-    if (S && S.friendsRoom) S.players.filter(p => !p.bot).forEach(p => { if (!fs.players.some(n => n.toLowerCase() === p.name.toLowerCase())) fs.players.push(p.name); });
+    (fs.people || []).forEach(n => { if (!fs.players.some(x => x.toLowerCase() === n.toLowerCase())) fs.players.push(n); });
+    fs.players.sort((x, y) => x.localeCompare(y, "ro"));
   }
   const canEdit = () => { const S = fsCtx && fsCtx.S(); return !!(S && S.admin); };
   function totals() {
@@ -323,9 +323,9 @@ window.PokerAdmin = (() => {
       h += `</tbody></table></div>`;
     }
     if (ed) {
-      h += `<div class="share"><button class="btn primary" data-fact="newgame">➕ Joc nou</button>${fillOptions() ? `<button class="btn" data-fact="fill">📥 Completează ultimul joc din locurile de la masă</button>` : ""}</div>
+      h += `<div class="share"><button class="btn primary" data-fact="newgame">➕ Joc nou</button></div>
         <div class="share"><input class="t" id="fsNewName" maxlength="18" placeholder="Adaugă un jucător în tabel" style="flex:1;min-width:0"><button class="btn small" data-fact="addp">Adaugă</button></div>
-        <p class="hint">Punctele le scrii tu. Opțional, „Completează” propune punctele din locurile ultimului joc (locul 1 = 8 p, locul 2 = 7 p … minim 1 p), iar tu le corectezi.</p>`;
+        <p class="hint">Punctele le scrii tu. După fiecare joc apeși „➕ Joc nou”; totalurile și clasamentul se fac singure. Jucătorii noi apar automat în tabel.</p>`;
     }
     h += `</section>`;
     if (fs.games.length) {

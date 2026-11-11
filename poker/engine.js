@@ -169,7 +169,7 @@ class Room {
       conns: 0, timeouts: 0, startChips: 0, leaving: false, rebuys: 0, bank: this.settings.timeBankSec * 1000, emoji: null, played: false, lastChat: null, avatar: null, avatarV: 0,
     };
     this.players.push(p);
-    if (inGame && this.isTournament()) { p.waiting = false; p.spectator = true; p.chips = 0; }
+    if (inGame && this.needsApproval()) { p.waiting = false; p.spectator = true; p.chips = 0; }
     if (this.onAdd) try { this.onAdd(p); } catch (_) {}
     if (!quiet) this.addLog(`${p.name} a fost adăugat la masă.`);
     return p;
@@ -195,6 +195,8 @@ class Room {
   findByName(name) { name = String(name || "").trim().toLowerCase(); return this.players.find(p => p.name.toLowerCase() === name); }
   // un jucător își deschide linkul / se reconectează
   isTournament() { return !!(this.event && this.event.type === "turneu"); }
+  // intrarea după start se face cu acordul gazdei: la turneu și la mesele cu reguli de turneu (Poker Friends)
+  needsApproval() { return this.isTournament() || !!this.tournamentRules; }
   gameRunning() { return this.started && !this.finished; }
   // intră în jocul în desfășurare (primește cărți de la mâna următoare)
   joinRunning(p) {
@@ -242,7 +244,7 @@ class Room {
     p.seen = true;
     if (p.autoSit) { p.autoSit = false; p.sitOut = false; this.addLog(`${p.name} s-a întors la masă.`); }
     if (this.gameRunning() && p.spectator && !p.sitOut && !p.out) {
-      if (this.isTournament()) { if (first) this.addLog(`${p.name} a intrat la masă.`); this.requestJoin(p); return; }
+      if (this.needsApproval()) { if (first) this.addLog(`${p.name} a intrat la masă.`); this.requestJoin(p); return; }
       this.joinRunning(p);
       this.addLog(`${p.name} a intrat la masă (primește cărți de la mâna următoare).`);
       return;
@@ -257,7 +259,7 @@ class Room {
     p.sitOut = false; p.sitOutOnce = false; p.autoSit = false;
     if (p.spectator) {
       if (inGame) {
-        if (this.isTournament()) { this.requestJoin(p); return; }
+        if (this.needsApproval()) { this.requestJoin(p); return; }
         this.joinRunning(p);
       } else p.spectator = false;
     }
@@ -701,6 +703,7 @@ class Room {
   }
   rebuyOpen() {
     if (this.practice) return this.started && !this.finished; // la masa de antrenament: reintrare oricând
+    if (this.tournamentRules) return false; // Poker Friends: reguli de turneu, fără reintrare
     return this.started && !this.finished && !!this.event && this.event.type === "simplu" && this.settings.rebuyUntilLevel > 0 && this.level + 1 <= this.settings.rebuyUntilLevel;
   }
   rebuy(p, now) {
