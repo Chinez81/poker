@@ -127,7 +127,7 @@ window.Official = (() => {
   function viewNight0() {
     const s = nightSummary(cur), d = s.d, dis = canWrite ? "" : " disabled";
     let h = "";
-    if (!canWrite) h += `<div class="ofc-ro">Vezi punctajul oficial al turneului. Doar organizatorul îl completează.</div>`;
+    if (!canWrite) h += `<div class="ofc-ro">Vezi Punctajul Oficial Live. Doar organizatorul îl completează.</div>`;
     h += `<section class="panel"><h2>♠ Seara nr. ${cur}<span class="aside">din ${SERI}</span></h2><div class="ofc-nights">`;
     for (let i = 1; i <= SERI; i++) h += `<button class="nchip${i === cur ? " on" : ""}${hasData(i) ? " has" : ""}" data-oact="night" data-n="${i}">${i}</button>`;
     h += `</div><div class="ofc-rowf"><label for="ofc-date">Data serii</label>${canWrite ? `<input type="date" id="ofc-date" class="t" value="${esc(d.date || "")}">` : `<b>${d.date ? fmtDate(d.date) : "—"}</b>`}</div></section>`;
@@ -314,7 +314,7 @@ window.Official = (() => {
     if (!root) {
       root = document.createElement("div");
       root.className = "ofc";
-      root.innerHTML = `<div class="ofc-head"><div class="ofc-title">📋 Punctaj oficial<div class="ofc-status"></div></div><button class="iconbtn ofc-x" data-oclose aria-label="Închide">✕</button></div>
+      root.innerHTML = `<div class="ofc-head"><div class="ofc-title">📋 Punctaj Oficial Live<div class="ofc-status"></div></div><button class="iconbtn ofc-x" data-oclose aria-label="Închide">✕</button></div>
         <div class="ofc-tabs"><button class="ofc-tab" data-otab="seara">♠ Seara</button><button class="ofc-tab" data-otab="clasament">♥ Clasament</button><button class="ofc-tab" data-otab="bani">♦ Fond finală</button></div>
         <div class="ofc-body"></div><div class="ofc-savebar" hidden></div>`;
       root.addEventListener("click", onClick); root.addEventListener("input", onInput); root.addEventListener("change", onChange); root.addEventListener("keydown", onKey);

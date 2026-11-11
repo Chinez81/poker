@@ -347,7 +347,7 @@
     try {
       const p = await (await fetch("/api/official?token=" + encodeURIComponent(token || ""), { cache: "no-store" })).json();
       window.Official.open(p, { canWrite: !!p.canEdit, toast, save: data => post("official", { data }) });
-    } catch (_) { toast("Punctajul oficial nu s-a putut încărca. Verifică internetul."); }
+    } catch (_) { toast("Punctajul Oficial Live nu s-a putut încărca. Verifică internetul."); }
   }
   // ---------- numele meselor și legătura cu meniul gazdei ----------
   const roomTitle = () => !S ? "POKER KY" : S.practice ? "Poker Training" : S.mainRoom ? "POKER TOURNAMENT" : S.friendsRoom ? "Poker Friends" : "POKER KY";
@@ -360,7 +360,7 @@
     if (!S) return "";
     let h = "";
     if (S.admin) h += `<button class="btn primary wide" data-act="adminMenu">👑 Meniu gazdă${S.adminReqs ? ` <span class="badge">${S.adminReqs}</span>` : ""}</button>`;
-    if (!S.guest) h += `<button class="btn wide" data-act="official">📋 Punctaj oficial (POKER TOURNAMENT)</button>`;
+    if (!S.guest) h += `<button class="btn wide" data-act="official">📋 Punctaj Oficial Live</button>`;
     if (S.friendsRoom) h += `<button class="btn wide" data-act="fscore">📊 Punctaj Poker Friends</button>`;
     let row = "";
     if (S.mainRoom && S.friendsAccess) row += `<button class="btn" data-act="goFriends" style="flex:1">🃏 Poker Friends</button>`;
@@ -606,7 +606,7 @@
       <div class="hero"><div class="suits">♠<span class="r">♥</span><span class="r">♦</span>♣</div><h1>POKER KY</h1><p>Texas Hold'em pe fise, la masa voastră privată.</p></div>
       ${error ? `<p class="err">${esc(error)}</p>` : ""}
       ${mainL || frL || prL ? `<div class="share">${mainL ? `<a class="btn primary" style="flex:1" href="${esc(mainL)}">♠ POKER TOURNAMENT</a>` : ""}${frL ? `<a class="btn" style="flex:1" href="${esc(frL)}">🃏 Poker Friends</a>` : ""}${prL ? `<a class="btn" style="flex:1" href="${esc(prL)}">🎯 Poker Training</a>` : ""}</div>` : ""}
-      <button class="btn wide" id="homeOfficial">📋 Punctaj oficial (POKER TOURNAMENT)</button>
+      <button class="btn wide" id="homeOfficial">📋 Punctaj Oficial Live</button>
       <section class="panel"><h2>🔑 Nu mai găsești linkul?</h2><p class="hint">Dacă ești în grupul POKER TOURNAMENT și ai pierdut linkul (sau ai șters datele browserului), cere acces gazdei. Când acceptă, intri imediat.</p>
         <button class="btn primary" id="homeAccess">🔑 Cere acces gazdei</button></section>
       <details class="panel morebox"><summary>Alte mese (cu cod)</summary>
@@ -725,7 +725,7 @@
         <div id="results"></div>
         <div id="startArea"></div>
         <section class="panel"><h2>Reguli fixe</h2><p class="hint">${PRACTICE_INFO}</p></section>
-        <div class="share"><button class="btn" data-act="official" style="flex:1">📋 Punctaj oficial</button><button class="btn" data-act="backMain" style="flex:1">⬅ POKER TOURNAMENT</button></div>
+        <div class="share"><button class="btn" data-act="official" style="flex:1">📋 Punctaj Oficial Live</button><button class="btn" data-act="backMain" style="flex:1">⬅ POKER TOURNAMENT</button></div>
         <div class="share"><button class="btn small" data-act="drawer" style="flex:1">🔊 Sunet și setări</button></div>
       </div>`;
       $app.onclick = lobbyClick; $app.oninput = null; $app.onchange = null; $app.onsubmit = null;
@@ -1048,7 +1048,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
     $app.onclick = tableClick; $app.oninput = tableInput; $app.onchange = null;
     $app.innerHTML = `<div class="game">
       <div class="topbar"><div class="lvl"><span class="bl num" id="tbBlinds"></span><span class="meta" id="tbMeta"></span><span class="clock num" id="tbClock"></span></div>
-        ${S.guest ? "" : `<button class="iconbtn" data-act="official" aria-label="Punctaj oficial">📋</button>`}<button class="iconbtn" data-act="${S.friendsRoom ? "fscore" : "score"}" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
+        ${S.guest ? "" : `<button class="iconbtn" data-act="official" aria-label="Punctaj Oficial Live">📋</button>`}<button class="iconbtn" data-act="${S.friendsRoom ? "fscore" : "score"}" aria-label="Punctaj">🏆</button><button class="iconbtn" data-act="sound" aria-label="Volum">${muted ? "🔇" : "🔊"}</button><button class="iconbtn" data-act="drawer">💬<span id="chatBadge"></span></button><span id="hostBtn"></span></div>
       <div id="reqArea" class="reqarea"></div>
       <div class="tablearea" id="tablearea"><div class="felt" id="felt"><div class="rail"></div><div class="wood"></div><div class="cloth"></div></div><div id="seats"></div><div class="center" id="center"></div><div id="winArea"></div></div>
       <div class="mybar" id="mybar"></div></div>`;
@@ -1389,7 +1389,7 @@ ${me && me.link ? `<p class="hint">Păstrează linkul tău de gazdă (butonul Co
         <h3 class="sub">Aplicația</h3>${appHtml()}
         <h3 class="sub">Poza ta</h3><div class="share">${avatar(S.players.find(p => p.me), "lg")}<button class="btn" data-act="avatar">Alege o poză</button></div>
         <h3 class="sub">Joc</h3><div class="share">${(() => { const me = S.players.find(p => p.me); return me.sitOut || me.spectator ? `<button class="btn primary" data-act="sitBack">▶ Revin în joc</button>` : `<button class="btn" data-act="sitHand">Stau o mână</button><button class="btn" data-act="sitOut">Stau deoparte</button>`; })()}</div>
-        ${S.guest ? "" : `<h3 class="sub">Punctaj oficial</h3><button class="btn" data-act="official">📋 Deschide punctajul oficial</button>`}
+        ${S.guest ? "" : `<h3 class="sub">Punctaj Oficial Live</h3><button class="btn" data-act="official">📋 Deschide Punctajul Oficial Live</button>`}
         ${S.friendsRoom ? `<h3 class="sub">Poker Friends</h3><button class="btn" data-act="fscore">📊 Punctaj Poker Friends</button>${S.guest ? "" : `<button class="btn" data-act="backMain">⬅ POKER TOURNAMENT</button>`}` : ""}
         ${S.mainRoom && S.friendsAccess ? `<h3 class="sub">Poker Friends</h3><button class="btn" data-act="goFriends">🃏 Mergi la Poker Friends</button>` : ""}
         ${S.practice ? `<h3 class="sub">Poker Training</h3><p class="hint">${PRACTICE_INFO}</p><button class="btn" data-act="backMain">⬅ POKER TOURNAMENT</button></div>` : `${S.trainingAccess ? `<h3 class="sub">Poker Training</h3><p class="hint">Masa ta de antrenament: joci singur cu până la 7 boți, oricând.</p><button class="btn" data-act="myTable">🎯 Poker Training (antrenament cu boți)</button>` : ""}

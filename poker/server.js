@@ -325,7 +325,7 @@ async function api(req, res, url) {
   }
   if (req.method === "POST" && route === "official") {
     let body; try { body = await readBody(req); } catch (e) { return json(res, 400, { error: e.message }); }
-    if (!isOfficialAdmin(body.token)) return json(res, 403, { error: "Doar organizatorul poate modifica punctajul oficial." });
+    if (!isOfficialAdmin(body.token)) return json(res, 403, { error: "Doar organizatorul poate modifica Punctajul Oficial Live." });
     const d = body.data;
     if (!d || typeof d !== "object" || !Array.isArray(d.players) || typeof d.nights !== "object" || JSON.stringify(d).length > 250000) return json(res, 400, { error: "Date invalide." });
     try {

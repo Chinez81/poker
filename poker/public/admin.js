@@ -86,7 +86,7 @@ window.PokerAdmin = (() => {
       case "unblock": return run("unblock", { name: d.name }, `${d.name} a fost reactivat. Linkul lui merge din nou.`);
       case "delete": {
         const name = d.name;
-        const c = await confirmName("🗑 Șterge definitiv", `Se șterge tot ce ține de <b>${esc(name)}</b>: punctajul din clasamentul oficial și linkul lui. Nu se mai poate recupera.`, name, "🗑 Da, șterge definitiv");
+        const c = await confirmName("🗑 Șterge definitiv", `Se șterge tot ce ține de <b>${esc(name)}</b>: punctajul din Punctajul Oficial Live și linkul lui. Nu se mai poate recupera.`, name, "🗑 Da, șterge definitiv");
         if (!c) return;
         return run("delete", { name, confirm: c }, `${name} a fost șters definitiv.`);
       }
@@ -192,7 +192,7 @@ window.PokerAdmin = (() => {
     // cereri
     if (state && (state.accReqs.length || state.devReqs.length)) h += `<section class="panel"><h2>🔔 Cereri care așteaptă</h2>${alertsHtml(ctx)}</section>`;
     // link nou creat
-    if (createdLink) h += `<section class="panel newlink"><h2>✅ Link creat pentru ${esc(createdLink.name)}</h2><div class="link">${esc(ctx.origin + createdLink.link)}</div><div class="share">${linkBtns(createdLink.kind, createdLink.name, createdLink.link)}</div><p class="hint">${createdLink.kind === "friend" ? "Când îl deschide prima dată, primești o cerere: apasă Acceptă. Linkul merge apoi doar pe telefonul lui." : "Îl deschide și intră direct la POKER TOURNAMENT. Apare automat și în punctajul oficial."}</p></section>`;
+    if (createdLink) h += `<section class="panel newlink"><h2>✅ Link creat pentru ${esc(createdLink.name)}</h2><div class="link">${esc(ctx.origin + createdLink.link)}</div><div class="share">${linkBtns(createdLink.kind, createdLink.name, createdLink.link)}</div><p class="hint">${createdLink.kind === "friend" ? "Când îl deschide prima dată, primești o cerere: apasă Acceptă. Linkul merge apoi doar pe telefonul lui." : "Îl deschide și intră direct la POKER TOURNAMENT. Apare automat și în Punctajul Oficial Live."}</p></section>`;
     // jocul
     if (S) {
       const running = S.started && !S.finished;
@@ -215,14 +215,14 @@ window.PokerAdmin = (() => {
       });
       p += `</div>`;
       p += state.roster.length < state.max
-        ? `<h3 class="sub">➕ Jucător nou</h3><div class="share"><input class="t" id="admAddName" maxlength="18" placeholder="Numele jucătorului" autocapitalize="characters" style="flex:1;min-width:0"><button class="btn primary" data-act="adm:add">Creează linkul</button></div><p class="hint">Apare automat la masă, în punctajul oficial (de azi încolo) și pe foaia de punctaj, în ordine alfabetică.</p>`
+        ? `<h3 class="sub">➕ Jucător nou</h3><div class="share"><input class="t" id="admAddName" maxlength="18" placeholder="Numele jucătorului" autocapitalize="characters" style="flex:1;min-width:0"><button class="btn primary" data-act="adm:add">Creează linkul</button></div><p class="hint">Apare automat la masă, în Punctajul Oficial Live (de azi încolo) și pe foaia de punctaj, în ordine alfabetică.</p>`
         : `<p class="hint">Sunt ${state.max} jucători, cât încap la masă. Ca să adaugi pe cineva, elimină întâi pe altcineva.</p>`;
       p += `<h3 class="sub">🔒 Eliminați (blocați)</h3>`;
       p += state.blocked.length ? `<div class="plist">${state.blocked.map(x => `<div class="pl"><span class="nm">${esc(x.name)}</span><div class="share"><button class="btn small primary" data-act="adm:unblock" data-name="${esc(x.name)}">↩ Reactivează</button><button class="btn small red" data-act="adm:delete" data-name="${esc(x.name)}">🗑 Șterge definitiv</button></div></div>`).join("")}</div><p class="hint">Cei blocați nu pot intra, dar punctajul lor rămâne. „Reactivează” le redă accesul cu același link. „Șterge definitiv” șterge tot (și punctajul).</p>` : `<p class="hint">Nu e nimeni blocat.</p>`;
       h += sec("players", "👥 Jucători POKER TOURNAMENT", p, `${state.roster.length} / ${state.max}`);
       // Poker Friends
       let f = `<div class="share">${S && S.friendsRoom ? `<button class="btn" data-act="backMain">⬅ Mergi la POKER TOURNAMENT</button>` : `<button class="btn primary" data-act="goFriends">🃏 Mergi la masa Poker Friends</button>`}<button class="btn" data-act="fscore">📊 Punctaj Poker Friends</button></div>
-        <p class="hint">Masă separată, cu aceleași setări și același aspect. Punctajul ei nu are legătură cu cel oficial.</p>`;
+        <p class="hint">Masă separată, cu aceleași setări și același aspect. Punctajul ei nu are legătură cu Punctajul Oficial Live.</p>`;
       f += `<h3 class="sub">Invitați</h3>`;
       f += state.friends.length ? `<div class="plist">${state.friends.map(x => `<div class="pl col"><div class="pl-top"><span class="dot ${x.online ? "on" : ""}"></span><span class="nm">${esc(x.name)}</span>${x.status !== "ok" ? '<span class="tag muted">blocat</span>' : ""}<span class="tag muted">${x.devices ? `📱 ${x.devices} ${x.devices === 1 ? "telefon" : "telefoane"}` : "n-a intrat încă"}</span></div>
         <div class="share">${linkBtns("friend", x.name, x.link)}${x.status === "ok" ? `<button class="btn small" data-act="adm:fBlock" data-name="${esc(x.name)}">🔒 Blochează</button>` : `<button class="btn small primary" data-act="adm:fUnblock" data-name="${esc(x.name)}">↩ Reactivează</button>`}${x.devices ? `<button class="btn small" data-act="adm:fReset" data-name="${esc(x.name)}">📱 Resetează telefonul</button>` : ""}<button class="btn small red" data-act="adm:fDelete" data-name="${esc(x.name)}">🗑 Șterge</button></div></div>`).join("")}</div>` : `<p class="hint">Încă n-ai invitat pe nimeni.</p>`;
@@ -234,11 +234,11 @@ window.PokerAdmin = (() => {
       h += sec("friends", "🃏 Poker Friends", f, `${state.friends.filter(x => x.status === "ok").length} invitați`);
     }
     // punctaj și foaie
-    h += sec("score", "📋 Punctaj oficial și foaia de punctaj", `<div class="share"><button class="btn primary" data-act="official">📋 Deschide punctajul oficial</button></div>
+    h += sec("score", "📋 Punctaj Oficial Live și foaia de punctaj", `<div class="share"><button class="btn primary" data-act="official">📋 Deschide Punctajul Oficial Live</button></div>
       <div class="share"><button class="btn" data-act="adm:print" data-mode="full">🖨️ Tipărește foaia serii (cu totalurile de până acum)</button><button class="btn" data-act="adm:print" data-mode="blank">🖨️ Foaie goală</button></div>
       <p class="hint">Foaia are mereu lista actuală de jucători, în ordine alfabetică, pe o singură pagină.</p>`);
     h += sec("backup", "💾 Copie de siguranță", `<button class="btn primary" data-act="adm:backup">💾 Descarcă o copie</button>
-      <p class="hint">Descarcă un fișier cu tot: jucători, linkuri, blocați, Poker Friends, punctajul oficial și punctajul Poker Friends. Salvează-l în e-mail (trimite-l ție), în Google Drive / iCloud sau pe calculator. Dacă vreodată se pierde ceva, trimite-i fișierul lui Claude și pune totul la loc.</p>
+      <p class="hint">Descarcă un fișier cu tot: jucători, linkuri, blocați, Poker Friends, Punctajul Oficial Live și punctajul Poker Friends. Salvează-l în e-mail (trimite-l ție), în Google Drive / iCloud sau pe calculator. Dacă vreodată se pierde ceva, trimite-i fișierul lui Claude și pune totul la loc.</p>
       ${state && state.storage !== "github" ? `<p class="err">Atenție: salvarea pe GitHub nu este configurată. Datele se pot pierde la repornirea serverului.</p>` : ""}`);
     if (S) {
       let o = `<div class="share">${S.trainingAccess ? `<button class="btn" data-act="myTable">🎯 Poker Training</button>` : ""}<button class="btn" data-act="reload">🔄 Actualizează aplicația</button></div>`;
