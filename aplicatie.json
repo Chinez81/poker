@@ -1,0 +1,28 @@
+{
+ "savedAt": 1794435336699,
+ "data": {
+  "roster": [
+   "ANDREI",
+   "ANDU",
+   "CHINEZU",
+   "KOSTICA",
+   "MARIUS B",
+   "MARIUS PDM",
+   "MIRCEA",
+   "REMUS"
+  ],
+  "blocked": [],
+  "ver": {},
+  "friends": {
+   "list": [],
+   "members": [],
+   "invited": [],
+   "fver": {}
+  },
+  "fscore": {
+   "players": [],
+   "games": [],
+   "finals": []
+  }
+ }
+}
