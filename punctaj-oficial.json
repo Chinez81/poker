@@ -1,5 +1,5 @@
 {
- "savedAt": 1794590765868,
+ "savedAt": 1794590832330,
  "data": {
   "players": [
    "ANDREI",
@@ -299,6 +299,16 @@
       "MARIUS PDM": 8
      }
     },
+    "note": ""
+   },
+   "s06": {
+    "date": "2026-11-13",
+    "absent": {
+     "MARIUS PDM": true,
+     "MIRCEA": true
+    },
+    "paid": {},
+    "pts": {},
     "note": ""
    }
   },
