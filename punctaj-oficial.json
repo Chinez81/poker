@@ -1,5 +1,5 @@
 {
- "savedAt": 1795193965807,
+ "savedAt": 1795195998777,
  "data": {
   "players": [
    "ANDREI",
@@ -354,7 +354,11 @@
     "date": "2026-11-20",
     "absent": {},
     "paid": {},
-    "pts": {},
+    "pts": {
+     "g1": {
+      "MARIUS PDM": 2
+     }
+    },
     "note": ""
    }
   },
