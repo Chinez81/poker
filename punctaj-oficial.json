@@ -1,5 +1,5 @@
 {
- "savedAt": 1794603526154,
+ "savedAt": 1795193965807,
  "data": {
   "players": [
    "ANDREI",
@@ -307,7 +307,10 @@
      "MARIUS PDM": true,
      "MIRCEA": true
     },
-    "paid": {},
+    "paid": {
+     "MARIUS PDM": "2026-11-20",
+     "MIRCEA": "2026-11-20"
+    },
     "pts": {
      "g1": {
       "REMUS": 6,
@@ -345,6 +348,13 @@
       "REMUS": 5
      }
     },
+    "note": ""
+   },
+   "s07": {
+    "date": "2026-11-20",
+    "absent": {},
+    "paid": {},
+    "pts": {},
     "note": ""
    }
   },
